@@ -68,7 +68,7 @@ Authorization: Bearer <AUTH_TOKEN>
 
 If `AUTH_TOKEN` is empty, the update API allows requests. This keeps local and test usage simple, while production manifests should set the token from a Secret.
 
-The ServiceAccount needs only Deployment `get` and `patch` verbs. RBAC is namespace-scoped by default through a Role and RoleBinding.
+The ServiceAccount needs only Deployment `get` and `patch` verbs. RBAC is cluster-scoped through a ClusterRole and ClusterRoleBinding so one service instance can operate on Deployments across many namespaces.
 
 ## Error Handling
 
@@ -85,7 +85,7 @@ The API returns JSON errors with HTTP status codes:
 - Go HTTP service source code.
 - Unit tests for config, API handler behavior, and Kubernetes patch logic.
 - `Dockerfile` for a small static Linux image.
-- `deploy/rbac.yaml` with ServiceAccount, Role, and RoleBinding.
+- `deploy/rbac.yaml` with ServiceAccount, ClusterRole, and ClusterRoleBinding.
 - `deploy/deployment.yaml` example.
 - `README.md` with build, deploy, and curl usage.
 

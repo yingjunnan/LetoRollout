@@ -4,7 +4,7 @@
 
 **Goal:** Build a Go HTTP service that patches Kubernetes Deployment container images through an API.
 
-**Architecture:** The service is split into config loading, HTTP API handling, and Kubernetes Deployment patching. It uses in-cluster Kubernetes config by default and keeps deployment permissions limited to `get` and `patch` on Deployments.
+**Architecture:** The service is split into config loading, HTTP API handling, and Kubernetes Deployment patching. It uses in-cluster Kubernetes config by default and keeps cluster-wide Deployment permissions limited to `get` and `patch`.
 
 **Tech Stack:** Go 1.20, `net/http`, `k8s.io/client-go`, Kubernetes JSON Patch, Docker multi-stage build.
 
@@ -20,7 +20,7 @@
 - `internal/config/config_test.go`: config unit tests.
 - `internal/httpapi/handler_test.go`: API behavior tests.
 - `internal/kube/deployment_image_updater_test.go`: fake clientset patch tests.
-- `deploy/rbac.yaml`: namespace-scoped RBAC.
+- `deploy/rbac.yaml`: cluster-scoped RBAC for Deployment `get` and `patch`.
 - `deploy/deployment.yaml`: example in-cluster Deployment manifest.
 - `Dockerfile`: multi-stage container build.
 - `README.md`: usage and deployment notes.
@@ -70,7 +70,7 @@
 
 - [ ] Implement `main.go` to load config, create Kubernetes updater, register HTTP handler, and shut down gracefully.
 - [ ] Add Dockerfile using Go 1.20 builder and a distroless/static runtime.
-- [ ] Add namespace-scoped RBAC for `deployments` `get` and `patch`.
+- [ ] Add cluster-scoped RBAC for `deployments` `get` and `patch`.
 - [ ] Add example Deployment manifest with `AUTH_TOKEN` sourced from a Secret.
 - [ ] Add README commands for testing, building, deploying, and calling the API.
 

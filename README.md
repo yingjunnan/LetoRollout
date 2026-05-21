@@ -60,13 +60,13 @@ kubectl apply -f deploy/rbac.yaml
 kubectl apply -f deploy/deployment.yaml
 ```
 
-The default RBAC is namespace-scoped to `default` and grants only:
+The default RBAC grants the service cluster-wide Deployment access with only these verbs:
 
 ```text
 apps/deployments: get, patch
 ```
 
-To update Deployments in another namespace, change the namespace in `deploy/rbac.yaml` and `deploy/deployment.yaml`, or create equivalent RoleBindings in each target namespace.
+The ServiceAccount and example Deployment run in `default`, while `ClusterRoleBinding` lets that ServiceAccount patch Deployments in any namespace. If you deploy LetoRollout into another namespace, update the ServiceAccount namespace in `deploy/rbac.yaml` and `deploy/deployment.yaml`.
 
 ## Response Example
 
