@@ -133,11 +133,22 @@ curl -X POST http://localhost:8080/api/v1/deployments/image \
     "namespace": "default",
     "deployment": "nginx",
     "container": "nginx",
-    "image": "nginx:1.27.0"
+    "image": "nginx:1.27.0",
+    "dryRun": false,
+    "wait": true,
+    "timeoutSeconds": 300
   }'
 ```
 
 如果 `AUTH_TOKEN` 为空，更新 API 不需要 `Authorization` 请求头。
+
+可选请求字段：
+
+| 字段 | 默认值 | 描述 |
+| --- | --- | --- |
+| `dryRun` | `false` | 只预览旧镜像和新镜像，不实际 patch Deployment。 |
+| `wait` | `false` | 等待 Deployment 报告所有期望副本已更新且可用。 |
+| `timeoutSeconds` | `300` | `wait` 为 true 时的 rollout 等待超时时间。 |
 
 ## 配置
 
@@ -145,8 +156,12 @@ curl -X POST http://localhost:8080/api/v1/deployments/image \
 | --- | --- | --- |
 | `ADDR` | `:8080` | HTTP 监听地址。 |
 | `AUTH_TOKEN` | 空 | 更新请求的可选 Bearer token。 |
+| `ALLOWED_NAMESPACES` | 空 | 可选的 namespace 白名单，使用英文逗号分隔，例如 `dev,staging,prod`。为空时允许 RBAC 授权范围内的所有 namespace。 |
+| `REQUIRED_DEPLOYMENT_LABEL` | 空 | 目标 Deployment 必须具备的可选 `key=value` 标签，例如 `letorollout/enabled=true`。 |
 
 服务通过 `rest.InClusterConfig()` 使用 Kubernetes 集群内凭证。
+
+每次更新请求都会向 stdout 写入一行 JSON 审计日志，包含目标资源、镜像、dry-run、wait、状态，以及失败时的错误信息。
 
 ## 测试与构建
 
@@ -181,6 +196,12 @@ apps/deployments: get, patch
 
 ServiceAccount 和示例 Deployment 在 `default` 命名空间中运行，而 `ClusterRoleBinding` 允许该 ServiceAccount 在任何命名空间中更新 Deployments。如果将 LetoRollout 部署到其他命名空间，请更新 `deploy/rbac.yaml` 和 `deploy/deployment.yaml` 中的 ServiceAccount 命名空间。
 
+如果想加一道额外保护，可以给允许 LetoRollout 更新的 Deployment 打标签，并设置 `REQUIRED_DEPLOYMENT_LABEL`：
+
+```bash
+kubectl label deployment nginx letorollout/enabled=true -n default
+```
+
 ## 响应示例
 
 ```json
@@ -190,7 +211,8 @@ ServiceAccount 和示例 Deployment 在 `default` 命名空间中运行，而 `C
   "container": "nginx",
   "oldImage": "nginx:1.26.0",
   "newImage": "nginx:1.27.0",
-  "generation": 2
+  "generation": 2,
+  "rolloutComplete": true
 }
 ```
 
