@@ -1,14 +1,12 @@
 # LetoRollout
 
-<div align="right">
-<button onclick="switchLanguage('en')">English</button> | <button onclick="switchLanguage('zh')">中文</button>
-</div>
+Languages: [English](#english) | [中文](#中文)
 
-<div id="en-content" style="display: block;">
+## English
 
 LetoRollout is a small Go service that runs inside Kubernetes and patches a Deployment container image through an HTTP API.
 
-## API
+### API
 
 Health check:
 
@@ -43,7 +41,7 @@ Optional request fields:
 | `wait` | `false` | Wait until the Deployment reports all desired replicas updated and available. |
 | `timeoutSeconds` | `300` | Rollout wait timeout when `wait` is true. |
 
-## Configuration
+### Configuration
 
 | Environment variable | Default | Description |
 | --- | --- | --- |
@@ -56,7 +54,7 @@ The service uses Kubernetes in-cluster credentials through `rest.InClusterConfig
 
 Each update attempt writes one JSON audit log line to stdout with the target, image, dry-run flag, wait flag, status, and error when present.
 
-## Test And Build
+### Test And Build
 
 ```bash
 go test ./...
@@ -64,7 +62,7 @@ go build ./cmd/server
 docker build -t letorollout:latest .
 ```
 
-## Deploy
+### Deploy
 
 Create a token Secret if you want API auth:
 
@@ -95,7 +93,7 @@ For an extra safety gate, label Deployments that LetoRollout may update and set 
 kubectl label deployment nginx letorollout/enabled=true -n default
 ```
 
-## Response Example
+### Response Example
 
 ```json
 {
@@ -109,13 +107,11 @@ kubectl label deployment nginx letorollout/enabled=true -n default
 }
 ```
 
-</div>
+## 中文
 
-<div id="zh-content" style="display: none;">
+LetoRollout 是一个运行在 Kubernetes 内部的小型 Go 服务，通过 HTTP API 更新 Deployment 的容器镜像。
 
-LetoRollout 是一个运行在 Kubernetes 内部的小型 Go 服务，通过 HTTP API 来更新 Deployment 的容器镜像。
-
-## API
+### API
 
 健康检查：
 
@@ -150,7 +146,7 @@ curl -X POST http://localhost:8080/api/v1/deployments/image \
 | `wait` | `false` | 等待 Deployment 报告所有期望副本已更新且可用。 |
 | `timeoutSeconds` | `300` | `wait` 为 true 时的 rollout 等待超时时间。 |
 
-## 配置
+### 配置
 
 | 环境变量 | 默认值 | 描述 |
 | --- | --- | --- |
@@ -163,7 +159,7 @@ curl -X POST http://localhost:8080/api/v1/deployments/image \
 
 每次更新请求都会向 stdout 写入一行 JSON 审计日志，包含目标资源、镜像、dry-run、wait、状态，以及失败时的错误信息。
 
-## 测试与构建
+### 测试与构建
 
 ```bash
 go test ./...
@@ -171,7 +167,7 @@ go build ./cmd/server
 docker build -t letorollout:latest .
 ```
 
-## 部署
+### 部署
 
 如果需要 API 认证，创建 token Secret：
 
@@ -188,13 +184,13 @@ kubectl apply -f deploy/rbac.yaml
 kubectl apply -f deploy/deployment.yaml
 ```
 
-默认的 RBAC 授予服务集群范围的 Deployment 访问权限，仅包含以下操作：
+默认 RBAC 授予服务集群范围的 Deployment 访问权限，仅包含以下操作：
 
 ```text
 apps/deployments: get, patch
 ```
 
-ServiceAccount 和示例 Deployment 在 `default` 命名空间中运行，而 `ClusterRoleBinding` 允许该 ServiceAccount 在任何命名空间中更新 Deployments。如果将 LetoRollout 部署到其他命名空间，请更新 `deploy/rbac.yaml` 和 `deploy/deployment.yaml` 中的 ServiceAccount 命名空间。
+ServiceAccount 和示例 Deployment 在 `default` 命名空间中运行，`ClusterRoleBinding` 允许该 ServiceAccount 在任何命名空间中更新 Deployment。如果将 LetoRollout 部署到其他命名空间，请更新 `deploy/rbac.yaml` 和 `deploy/deployment.yaml` 中的 ServiceAccount 命名空间。
 
 如果想加一道额外保护，可以给允许 LetoRollout 更新的 Deployment 打标签，并设置 `REQUIRED_DEPLOYMENT_LABEL`：
 
@@ -202,7 +198,7 @@ ServiceAccount 和示例 Deployment 在 `default` 命名空间中运行，而 `C
 kubectl label deployment nginx letorollout/enabled=true -n default
 ```
 
-## 响应示例
+### 响应示例
 
 ```json
 {
@@ -215,52 +211,3 @@ kubectl label deployment nginx letorollout/enabled=true -n default
   "rolloutComplete": true
 }
 ```
-
-</div>
-
-<script>
-function switchLanguage(lang) {
-    if (lang === 'en') {
-        document.getElementById('en-content').style.display = 'block';
-        document.getElementById('zh-content').style.display = 'none';
-    } else if (lang === 'zh') {
-        document.getElementById('en-content').style.display = 'none';
-        document.getElementById('zh-content').style.display = 'block';
-    }
-
-    const buttons = document.querySelectorAll('button');
-    buttons.forEach(btn => {
-        if (btn.textContent.includes(lang === 'en' ? 'English' : '中文')) {
-            btn.style.fontWeight = 'bold';
-            btn.style.textDecoration = 'underline';
-        } else {
-            btn.style.fontWeight = 'normal';
-            btn.style.textDecoration = 'none';
-        }
-    });
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    const enButton = document.querySelector("button[onclick=\"switchLanguage('en')\"]");
-    if (enButton) {
-        enButton.style.fontWeight = 'bold';
-        enButton.style.textDecoration = 'underline';
-    }
-});
-</script>
-
-<style>
-button {
-    background: none;
-    border: 1px solid #ccc;
-    padding: 4px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    margin: 0 2px;
-}
-
-button:hover {
-    background-color: #f0f0f0;
-}
-</style>
