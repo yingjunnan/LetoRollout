@@ -26,11 +26,22 @@ curl -X POST http://localhost:8080/api/v1/deployments/image \
     "namespace": "default",
     "deployment": "nginx",
     "container": "nginx",
-    "image": "nginx:1.27.0"
+    "image": "nginx:1.27.0",
+    "dryRun": false,
+    "wait": true,
+    "timeoutSeconds": 300
   }'
 ```
 
 If `AUTH_TOKEN` is empty, the update API does not require the `Authorization` header.
+
+Optional request fields:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `dryRun` | `false` | Preview the old and new image without patching the Deployment. |
+| `wait` | `false` | Wait until the Deployment reports all desired replicas updated and available. |
+| `timeoutSeconds` | `300` | Rollout wait timeout when `wait` is true. |
 
 ## Configuration
 
@@ -38,8 +49,12 @@ If `AUTH_TOKEN` is empty, the update API does not require the `Authorization` he
 | --- | --- | --- |
 | `ADDR` | `:8080` | HTTP listen address. |
 | `AUTH_TOKEN` | empty | Optional bearer token for update requests. |
+| `ALLOWED_NAMESPACES` | empty | Optional comma-separated namespace allowlist, for example `dev,staging,prod`. Empty allows all namespaces permitted by RBAC. |
+| `REQUIRED_DEPLOYMENT_LABEL` | empty | Optional `key=value` label required on target Deployments, for example `letorollout/enabled=true`. |
 
 The service uses Kubernetes in-cluster credentials through `rest.InClusterConfig()`.
+
+Each update attempt writes one JSON audit log line to stdout with the target, image, dry-run flag, wait flag, status, and error when present.
 
 ## Test And Build
 
@@ -74,6 +89,12 @@ apps/deployments: get, patch
 
 The ServiceAccount and example Deployment run in `default`, while `ClusterRoleBinding` lets that ServiceAccount patch Deployments in any namespace. If you deploy LetoRollout into another namespace, update the ServiceAccount namespace in `deploy/rbac.yaml` and `deploy/deployment.yaml`.
 
+For an extra safety gate, label Deployments that LetoRollout may update and set `REQUIRED_DEPLOYMENT_LABEL`:
+
+```bash
+kubectl label deployment nginx letorollout/enabled=true -n default
+```
+
 ## Response Example
 
 ```json
@@ -83,7 +104,8 @@ The ServiceAccount and example Deployment run in `default`, while `ClusterRoleBi
   "container": "nginx",
   "oldImage": "nginx:1.26.0",
   "newImage": "nginx:1.27.0",
-  "generation": 2
+  "generation": 2,
+  "rolloutComplete": true
 }
 ```
 

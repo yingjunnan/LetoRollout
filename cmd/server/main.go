@@ -18,7 +18,10 @@ import (
 func main() {
 	cfg := config.Load()
 
-	updater, err := kube.NewInClusterDeploymentImageUpdater()
+	updater, err := kube.NewInClusterDeploymentImageUpdater(kube.UpdaterOptions{
+		AllowedNamespaces:       cfg.AllowedNamespaces,
+		RequiredDeploymentLabel: cfg.RequiredDeploymentLabel,
+	})
 	if err != nil {
 		log.Fatalf("create deployment image updater: %v", err)
 	}

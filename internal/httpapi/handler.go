@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"letorollout/internal/rollout"
 )
 
 var ErrNotFound = rollout.ErrNotFound
+var ErrForbidden = rollout.ErrForbidden
 
 type ImageUpdateRequest = rollout.ImageUpdateRequest
 type RolloutResult = rollout.RolloutResult
@@ -20,9 +24,13 @@ type RolloutService interface {
 }
 
 func NewHandler(service RolloutService, authToken string) http.Handler {
+	return NewHandlerWithAuditWriter(service, authToken, os.Stdout)
+}
+
+func NewHandlerWithAuditWriter(service RolloutService, authToken string, audit io.Writer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", handleHealthz)
-	mux.HandleFunc("/api/v1/deployments/image", handleUpdateImage(service, authToken))
+	mux.HandleFunc("/api/v1/deployments/image", handleUpdateImage(service, authToken, audit))
 	return mux
 }
 
@@ -35,7 +43,7 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func handleUpdateImage(service RolloutService, authToken string) http.HandlerFunc {
+func handleUpdateImage(service RolloutService, authToken string, audit io.Writer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -60,9 +68,14 @@ func handleUpdateImage(service RolloutService, authToken string) http.HandlerFun
 		}
 
 		result, err := service.UpdateImage(r.Context(), req)
+		writeAudit(audit, req, result, err)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			if errors.Is(err, ErrForbidden) {
+				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -104,4 +117,33 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeAudit(out io.Writer, req ImageUpdateRequest, result RolloutResult, err error) {
+	if out == nil {
+		return
+	}
+
+	event := map[string]any{
+		"ts":         time.Now().UTC().Format(time.RFC3339),
+		"event":      "deployment_image_update",
+		"namespace":  req.Namespace,
+		"deployment": req.Deployment,
+		"container":  req.Container,
+		"image":      req.Image,
+		"dryRun":     req.DryRun,
+		"wait":       req.Wait,
+		"status":     "ok",
+	}
+	if err != nil {
+		event["status"] = "error"
+		event["error"] = err.Error()
+	} else {
+		event["oldImage"] = result.OldImage
+		event["newImage"] = result.NewImage
+		event["generation"] = result.Generation
+		event["rolloutComplete"] = result.RolloutComplete
+	}
+
+	_ = json.NewEncoder(out).Encode(event)
 }

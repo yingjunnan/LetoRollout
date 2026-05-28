@@ -19,6 +19,8 @@ func TestLoadUsesDefaults(t *testing.T) {
 func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("ADDR", ":9090")
 	t.Setenv("AUTH_TOKEN", "secret")
+	t.Setenv("ALLOWED_NAMESPACES", "dev, staging,,prod")
+	t.Setenv("REQUIRED_DEPLOYMENT_LABEL", "letorollout/enabled=true")
 
 	cfg := Load()
 
@@ -28,4 +30,22 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	if cfg.AuthToken != "secret" {
 		t.Fatalf("AuthToken = %q, want secret", cfg.AuthToken)
 	}
+	if got, want := cfg.AllowedNamespaces, []string{"dev", "staging", "prod"}; !sameStrings(got, want) {
+		t.Fatalf("AllowedNamespaces = %#v, want %#v", got, want)
+	}
+	if cfg.RequiredDeploymentLabel != "letorollout/enabled=true" {
+		t.Fatalf("RequiredDeploymentLabel = %q, want letorollout/enabled=true", cfg.RequiredDeploymentLabel)
+	}
+}
+
+func sameStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

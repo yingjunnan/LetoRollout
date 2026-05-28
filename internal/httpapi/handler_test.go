@@ -82,17 +82,19 @@ func TestUpdateImageRejectsMissingFields(t *testing.T) {
 func TestUpdateImageReturnsRolloutResult(t *testing.T) {
 	svc := &fakeRolloutService{
 		result: RolloutResult{
-			Namespace:  "default",
-			Deployment: "nginx",
-			Container:  "nginx",
-			OldImage:   "nginx:1.26.0",
-			NewImage:   "nginx:1.27.0",
-			Generation: 7,
+			Namespace:       "default",
+			Deployment:      "nginx",
+			Container:       "nginx",
+			OldImage:        "nginx:1.26.0",
+			NewImage:        "nginx:1.27.0",
+			Generation:      7,
+			DryRun:          true,
+			RolloutComplete: true,
 		},
 	}
 	handler := NewHandler(svc, "secret")
 
-	body := bytes.NewBufferString(`{"namespace":"default","deployment":"nginx","container":"nginx","image":"nginx:1.27.0"}`)
+	body := bytes.NewBufferString(`{"namespace":"default","deployment":"nginx","container":"nginx","image":"nginx:1.27.0","dryRun":true,"wait":true,"timeoutSeconds":120}`)
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", body)
 	req.Header.Set("Authorization", "Bearer secret")
@@ -101,7 +103,7 @@ func TestUpdateImageReturnsRolloutResult(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
 	}
-	if svc.req.Namespace != "default" || svc.req.Deployment != "nginx" || svc.req.Container != "nginx" || svc.req.Image != "nginx:1.27.0" {
+	if svc.req.Namespace != "default" || svc.req.Deployment != "nginx" || svc.req.Container != "nginx" || svc.req.Image != "nginx:1.27.0" || !svc.req.DryRun || !svc.req.Wait || svc.req.TimeoutSeconds != 120 {
 		t.Fatalf("request = %+v, want parsed request", svc.req)
 	}
 
@@ -111,6 +113,9 @@ func TestUpdateImageReturnsRolloutResult(t *testing.T) {
 	}
 	if got.OldImage != "nginx:1.26.0" || got.NewImage != "nginx:1.27.0" || got.Generation != 7 {
 		t.Fatalf("response = %+v, want rollout result", got)
+	}
+	if !got.DryRun || !got.RolloutComplete {
+		t.Fatalf("response = %+v, want dry run and complete flags", got)
 	}
 }
 
@@ -137,5 +142,18 @@ func TestUpdateImageMapsUnexpectedErrorsTo500(t *testing.T) {
 
 	if resp.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", resp.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestUpdateImageMapsForbiddenTo403(t *testing.T) {
+	handler := NewHandler(&fakeRolloutService{err: ErrForbidden}, "")
+
+	body := bytes.NewBufferString(`{"namespace":"prod","deployment":"nginx","container":"nginx","image":"nginx:1.27.0"}`)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", body)
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusForbidden)
 	}
 }

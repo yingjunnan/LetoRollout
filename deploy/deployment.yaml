@@ -29,6 +29,10 @@ spec:
                   name: letorollout-auth
                   key: token
                   optional: true
+            - name: ALLOWED_NAMESPACES
+              value: ""
+            - name: REQUIRED_DEPLOYMENT_LABEL
+              value: ""
           ports:
             - name: http
               containerPort: 8080
