@@ -4,6 +4,7 @@ import "errors"
 
 var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("forbidden")
+var ErrAlreadyExists = errors.New("already exists")
 
 type ImageUpdateRequest struct {
 	Namespace      string `json:"namespace"`
@@ -24,4 +25,20 @@ type RolloutResult struct {
 	Generation      int64  `json:"generation"`
 	DryRun          bool   `json:"dryRun,omitempty"`
 	RolloutComplete bool   `json:"rolloutComplete,omitempty"`
+}
+
+type DeploymentCreateRequest struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Image     string `json:"image"`
+}
+
+type DeploymentCreateResult struct {
+	Namespace  string            `json:"namespace"`
+	Name       string            `json:"name"`
+	Container  string            `json:"container"`
+	Image      string            `json:"image"`
+	Replicas   int32             `json:"replicas"`
+	Generation int64             `json:"generation"`
+	Labels     map[string]string `json:"labels,omitempty"`
 }

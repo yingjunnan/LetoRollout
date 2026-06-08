@@ -13,6 +13,99 @@ import (
 	ktesting "k8s.io/client-go/testing"
 )
 
+func TestCreateDeploymentCreatesMinimalDeployment(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	updater := NewDeploymentImageUpdater(client)
+
+	result, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
+		Namespace: "default",
+		Name:      "nginx",
+		Image:     "nginx:1.27.0",
+	})
+	if err != nil {
+		t.Fatalf("CreateDeployment returned error: %v", err)
+	}
+
+	created, err := client.AppsV1().Deployments("default").Get(context.Background(), "nginx", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get created deployment: %v", err)
+	}
+	if created.Spec.Replicas == nil || *created.Spec.Replicas != 1 {
+		t.Fatalf("replicas = %v, want 1", created.Spec.Replicas)
+	}
+	if got := created.Spec.Template.Spec.Containers[0]; got.Name != "app" || got.Image != "nginx:1.27.0" {
+		t.Fatalf("container = %+v, want app with nginx:1.27.0", got)
+	}
+	for key, value := range created.Spec.Selector.MatchLabels {
+		if created.Spec.Template.Labels[key] != value {
+			t.Fatalf("template label %s = %q, want selector value %q", key, created.Spec.Template.Labels[key], value)
+		}
+	}
+	if result.Namespace != "default" || result.Name != "nginx" || result.Container != "app" || result.Image != "nginx:1.27.0" || result.Replicas != 1 {
+		t.Fatalf("result = %+v, want created deployment details", result)
+	}
+}
+
+func TestCreateDeploymentRejectsDisallowedNamespace(t *testing.T) {
+	updater := NewDeploymentImageUpdater(fake.NewSimpleClientset(), UpdaterOptions{
+		AllowedNamespaces: []string{"dev"},
+	})
+
+	_, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
+		Namespace: "prod",
+		Name:      "nginx",
+		Image:     "nginx:1.27.0",
+	})
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+}
+
+func TestCreateDeploymentAddsRequiredDeploymentLabel(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	updater := NewDeploymentImageUpdater(client, UpdaterOptions{
+		RequiredDeploymentLabel: "letorollout/enabled=true",
+	})
+
+	_, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
+		Namespace: "default",
+		Name:      "nginx",
+		Image:     "nginx:1.27.0",
+	})
+	if err != nil {
+		t.Fatalf("CreateDeployment returned error: %v", err)
+	}
+
+	created, err := client.AppsV1().Deployments("default").Get(context.Background(), "nginx", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get created deployment: %v", err)
+	}
+	if created.Labels["letorollout/enabled"] != "true" {
+		t.Fatalf("label = %q, want true", created.Labels["letorollout/enabled"])
+	}
+	if created.Spec.Template.Labels["letorollout/enabled"] != "true" {
+		t.Fatalf("template label = %q, want true", created.Spec.Template.Labels["letorollout/enabled"])
+	}
+}
+
+func TestCreateDeploymentReturnsAlreadyExists(t *testing.T) {
+	deployment := deploymentFixture("default", "nginx", []corev1.Container{
+		{Name: "nginx", Image: "nginx:1.26.0"},
+	})
+	updater := NewDeploymentImageUpdater(fake.NewSimpleClientset(deployment))
+
+	_, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
+		Namespace: "default",
+		Name:      "nginx",
+		Image:     "nginx:1.27.0",
+	})
+
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("err = %v, want ErrAlreadyExists", err)
+	}
+}
+
 func TestUpdateImagePatchesDeploymentContainerImage(t *testing.T) {
 	deployment := deploymentFixture("default", "nginx", []corev1.Container{
 		{Name: "sidecar", Image: "busybox:1.36"},

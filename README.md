@@ -14,6 +14,19 @@ Health check:
 curl http://localhost:8080/healthz
 ```
 
+Create a Deployment:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/deployments \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer change-me' \
+  -d '{
+    "namespace": "default",
+    "name": "nginx",
+    "image": "nginx:1.27.0"
+  }'
+```
+
 Update a Deployment image:
 
 ```bash
@@ -31,7 +44,7 @@ curl -X POST http://localhost:8080/api/v1/deployments/image \
   }'
 ```
 
-If `AUTH_TOKEN` is empty, the update API does not require the `Authorization` header.
+If `AUTH_TOKEN` is empty, the create and update APIs do not require the `Authorization` header.
 
 Optional request fields:
 
@@ -52,7 +65,7 @@ Optional request fields:
 
 The service uses Kubernetes in-cluster credentials through `rest.InClusterConfig()`.
 
-Each update attempt writes one JSON audit log line to stdout with the target, image, dry-run flag, wait flag, status, and error when present.
+Each create or update attempt writes one JSON audit log line to stdout with the target, image, status, and error when present. Update audit logs also include the dry-run and wait flags.
 
 ### Test And Build
 
@@ -82,10 +95,10 @@ kubectl apply -f deploy/deployment.yaml
 The default RBAC grants the service cluster-wide Deployment access with only these verbs:
 
 ```text
-apps/deployments: get, patch
+apps/deployments: get, patch, create
 ```
 
-The ServiceAccount and example Deployment run in `default`, while `ClusterRoleBinding` lets that ServiceAccount patch Deployments in any namespace. If you deploy LetoRollout into another namespace, update the ServiceAccount namespace in `deploy/rbac.yaml` and `deploy/deployment.yaml`.
+The ServiceAccount and example Deployment run in `default`, while `ClusterRoleBinding` lets that ServiceAccount create and patch Deployments in any namespace. If you deploy LetoRollout into another namespace, update the ServiceAccount namespace in `deploy/rbac.yaml` and `deploy/deployment.yaml`.
 
 For an extra safety gate, label Deployments that LetoRollout may update and set `REQUIRED_DEPLOYMENT_LABEL`:
 

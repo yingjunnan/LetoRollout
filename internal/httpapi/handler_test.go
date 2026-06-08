@@ -11,10 +11,20 @@ import (
 )
 
 type fakeRolloutService struct {
-	result RolloutResult
-	err    error
-	req    ImageUpdateRequest
-	calls  int
+	result       RolloutResult
+	err          error
+	req          ImageUpdateRequest
+	calls        int
+	createResult DeploymentCreateResult
+	createErr    error
+	createReq    DeploymentCreateRequest
+	createCalls  int
+}
+
+func (f *fakeRolloutService) CreateDeployment(ctx context.Context, req DeploymentCreateRequest) (DeploymentCreateResult, error) {
+	f.createCalls++
+	f.createReq = req
+	return f.createResult, f.createErr
 }
 
 func (f *fakeRolloutService) UpdateImage(ctx context.Context, req ImageUpdateRequest) (RolloutResult, error) {
@@ -44,6 +54,98 @@ func TestUpdateImageRequiresPost(t *testing.T) {
 
 	if resp.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestCreateDeploymentRequiresPost(t *testing.T) {
+	handler := NewHandler(&fakeRolloutService{}, "")
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/deployments", nil)
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestCreateDeploymentRejectsInvalidBearerToken(t *testing.T) {
+	svc := &fakeRolloutService{}
+	handler := NewHandler(svc, "secret")
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", bytes.NewBufferString(`{}`))
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusUnauthorized)
+	}
+	if svc.createCalls != 0 {
+		t.Fatalf("service called %d times, want 0", svc.createCalls)
+	}
+}
+
+func TestCreateDeploymentRejectsMissingFields(t *testing.T) {
+	svc := &fakeRolloutService{}
+	handler := NewHandler(svc, "")
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", bytes.NewBufferString(`{"namespace":"default"}`))
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusBadRequest)
+	}
+	if svc.createCalls != 0 {
+		t.Fatalf("service called %d times, want 0", svc.createCalls)
+	}
+}
+
+func TestCreateDeploymentReturnsCreatedDeployment(t *testing.T) {
+	svc := &fakeRolloutService{
+		createResult: DeploymentCreateResult{
+			Namespace:  "default",
+			Name:       "nginx",
+			Container:  "app",
+			Image:      "nginx:1.27.0",
+			Replicas:   1,
+			Generation: 1,
+		},
+	}
+	handler := NewHandler(svc, "secret")
+
+	body := bytes.NewBufferString(`{"namespace":"default","name":"nginx","image":"nginx:1.27.0"}`)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", body)
+	req.Header.Set("Authorization", "Bearer secret")
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusCreated, resp.Body.String())
+	}
+	if svc.createReq.Namespace != "default" || svc.createReq.Name != "nginx" || svc.createReq.Image != "nginx:1.27.0" {
+		t.Fatalf("request = %+v, want parsed request", svc.createReq)
+	}
+
+	var got DeploymentCreateResult
+	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Name != "nginx" || got.Container != "app" || got.Image != "nginx:1.27.0" || got.Replicas != 1 {
+		t.Fatalf("response = %+v, want create result", got)
+	}
+}
+
+func TestCreateDeploymentMapsAlreadyExistsTo409(t *testing.T) {
+	handler := NewHandler(&fakeRolloutService{createErr: ErrAlreadyExists}, "")
+
+	body := bytes.NewBufferString(`{"namespace":"default","name":"nginx","image":"nginx:1.27.0"}`)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", body)
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusConflict)
 	}
 }
 
