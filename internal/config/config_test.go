@@ -5,6 +5,7 @@ import "testing"
 func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("ADDR", "")
 	t.Setenv("AUTH_TOKEN", "")
+	t.Setenv("LOCAL_PREVIEW", "")
 
 	cfg := Load()
 
@@ -14,6 +15,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.AuthToken != "" {
 		t.Fatalf("AuthToken = %q, want empty", cfg.AuthToken)
 	}
+	if cfg.LocalPreview {
+		t.Fatalf("LocalPreview = %v, want false", cfg.LocalPreview)
+	}
 }
 
 func TestLoadReadsEnvironment(t *testing.T) {
@@ -21,6 +25,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("AUTH_TOKEN", "secret")
 	t.Setenv("ALLOWED_NAMESPACES", "dev, staging,,prod")
 	t.Setenv("REQUIRED_DEPLOYMENT_LABEL", "letorollout/enabled=true")
+	t.Setenv("LOCAL_PREVIEW", "1")
 
 	cfg := Load()
 
@@ -35,6 +40,9 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if cfg.RequiredDeploymentLabel != "letorollout/enabled=true" {
 		t.Fatalf("RequiredDeploymentLabel = %q, want letorollout/enabled=true", cfg.RequiredDeploymentLabel)
+	}
+	if !cfg.LocalPreview {
+		t.Fatalf("LocalPreview = %v, want true", cfg.LocalPreview)
 	}
 }
 

@@ -10,6 +10,7 @@ type Config struct {
 	AuthToken               string
 	AllowedNamespaces       []string
 	RequiredDeploymentLabel string
+	LocalPreview            bool
 }
 
 func Load() Config {
@@ -23,6 +24,7 @@ func Load() Config {
 		AuthToken:               os.Getenv("AUTH_TOKEN"),
 		AllowedNamespaces:       splitCSV(os.Getenv("ALLOWED_NAMESPACES")),
 		RequiredDeploymentLabel: strings.TrimSpace(os.Getenv("REQUIRED_DEPLOYMENT_LABEL")),
+		LocalPreview:            os.Getenv("LOCAL_PREVIEW") == "1",
 	}
 }
 

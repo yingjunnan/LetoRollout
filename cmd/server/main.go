@@ -18,17 +18,24 @@ import (
 func main() {
 	cfg := config.Load()
 
-	updater, err := kube.NewInClusterDeploymentImageUpdater(kube.UpdaterOptions{
-		AllowedNamespaces:       cfg.AllowedNamespaces,
-		RequiredDeploymentLabel: cfg.RequiredDeploymentLabel,
-	})
-	if err != nil {
-		log.Fatalf("create deployment image updater: %v", err)
+	var handler http.Handler
+	if cfg.LocalPreview {
+		handler = httpapi.NewHandler(httpapi.NewPreviewService(), cfg.AuthToken)
+		log.Printf("letorollout console preview enabled on %s", cfg.Addr)
+	} else {
+		updater, err := kube.NewInClusterDeploymentImageUpdater(kube.UpdaterOptions{
+			AllowedNamespaces:       cfg.AllowedNamespaces,
+			RequiredDeploymentLabel: cfg.RequiredDeploymentLabel,
+		})
+		if err != nil {
+			log.Fatalf("create deployment image updater: %v", err)
+		}
+		handler = httpapi.NewHandler(updater, cfg.AuthToken)
 	}
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.NewHandler(updater, cfg.AuthToken),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

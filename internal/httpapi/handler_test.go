@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,75 @@ func TestHealthz(t *testing.T) {
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+}
+
+func TestRootRedirectsToConsole(t *testing.T) {
+	handler := NewHandler(&fakeRolloutService{}, "")
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMovedPermanently)
+	}
+	if got := resp.Header().Get("Location"); got != "/console/" {
+		t.Fatalf("location = %q, want /console/", got)
+	}
+}
+
+func TestConsoleRedirectsToTrailingSlash(t *testing.T) {
+	handler := NewHandler(&fakeRolloutService{}, "")
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/console", nil)
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMovedPermanently)
+	}
+	if got := resp.Header().Get("Location"); got != "/console/" {
+		t.Fatalf("location = %q, want /console/", got)
+	}
+}
+
+func TestConsoleServesShell(t *testing.T) {
+	handler := NewHandler(&fakeRolloutService{}, "")
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/console/", nil)
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
+	}
+	if got := resp.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("content type = %q, want text/html; charset=utf-8", got)
+	}
+	body := resp.Body.String()
+	for _, want := range []string{"LetoRollout Console", "Create Deployment", "Update Image", "recent targets"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("console body missing %q; body=%s", want, body)
+		}
+	}
+}
+
+func TestConsoleServesJavaScriptAsset(t *testing.T) {
+	handler := NewHandler(&fakeRolloutService{}, "")
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/console/app.js", nil)
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
+	}
+	if got := resp.Header().Get("Content-Type"); got == "" || !strings.Contains(got, "javascript") {
+		t.Fatalf("content type = %q, want javascript", got)
+	}
+	if body := resp.Body.String(); !strings.Contains(body, "localStorage") || !strings.Contains(body, "fetch") {
+		t.Fatalf("asset body missing expected console logic; body=%s", body)
 	}
 }
 

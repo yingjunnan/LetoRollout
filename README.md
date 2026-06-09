@@ -6,6 +6,29 @@ Languages: [English](#english) | [中文](#中文)
 
 LetoRollout is a small Go service that runs inside Kubernetes and patches a Deployment container image through an HTTP API.
 
+### Web Console
+
+Open the built-in console at `/console/`.
+
+It provides two workflows:
+
+- Create a Deployment with image and environment variables.
+- Update an existing Deployment image, with optional dry-run and wait.
+
+The console is open access by default and relies on network boundaries rather
+than a separate login.
+
+For a local browser preview without Kubernetes, run the server with
+`LOCAL_PREVIEW=1`.
+
+```bash
+LOCAL_PREVIEW=1 ADDR=:8081 go run ./cmd/server
+```
+
+For a local browser preview without Kubernetes, run the server with
+`LOCAL_PREVIEW=1`. That mode serves the same console and API shape from an
+in-memory backend so you can exercise the UI quickly.
+
 ### API
 
 Health check:
@@ -77,6 +100,7 @@ Optional request fields:
 | `AUTH_TOKEN` | empty | Optional bearer token for update requests. |
 | `ALLOWED_NAMESPACES` | empty | Optional comma-separated namespace allowlist, for example `dev,staging,prod`. Empty allows all namespaces permitted by RBAC. |
 | `REQUIRED_DEPLOYMENT_LABEL` | empty | Optional `key=value` label required on target Deployments, for example `letorollout/enabled=true`. |
+| `LOCAL_PREVIEW` | `0` | Set to `1` to run the in-memory console preview backend instead of Kubernetes. |
 
 The service uses Kubernetes in-cluster credentials through `rest.InClusterConfig()`.
 

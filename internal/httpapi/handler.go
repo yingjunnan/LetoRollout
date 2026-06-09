@@ -2,17 +2,23 @@ package httpapi
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"time"
 
 	"letorollout/internal/rollout"
 )
+
+//go:embed static/*
+var staticFS embed.FS
 
 var ErrNotFound = rollout.ErrNotFound
 var ErrForbidden = rollout.ErrForbidden
@@ -37,9 +43,108 @@ func NewHandler(service RolloutService, authToken string) http.Handler {
 func NewHandlerWithAuditWriter(service RolloutService, authToken string, audit io.Writer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", handleHealthz)
+	mux.HandleFunc("/", handleRoot)
+	mux.HandleFunc("/console", handleConsoleRedirect)
+	mux.Handle("/console/", consoleHandler())
 	mux.HandleFunc("/api/v1/deployments", handleCreateDeployment(service, authToken, audit))
 	mux.HandleFunc("/api/v1/deployments/image", handleUpdateImage(service, authToken, audit))
 	return mux
+}
+
+type PreviewService struct {
+	deployments map[string]DeploymentCreateRequest
+}
+
+func NewPreviewService() *PreviewService {
+	return &PreviewService{
+		deployments: make(map[string]DeploymentCreateRequest),
+	}
+}
+
+func (s *PreviewService) CreateDeployment(ctx context.Context, req DeploymentCreateRequest) (DeploymentCreateResult, error) {
+	key := req.Namespace + "/" + req.Name
+	if _, exists := s.deployments[key]; exists {
+		return DeploymentCreateResult{}, ErrAlreadyExists
+	}
+	s.deployments[key] = req
+	return DeploymentCreateResult{
+		Namespace:  req.Namespace,
+		Name:       req.Name,
+		Container:  "app",
+		Image:      req.Image,
+		Replicas:   1,
+		Generation: 1,
+		Env:        req.Env,
+	}, nil
+}
+
+func (s *PreviewService) UpdateImage(ctx context.Context, req ImageUpdateRequest) (RolloutResult, error) {
+	key := req.Namespace + "/" + req.Deployment
+	deployment, exists := s.deployments[key]
+	if !exists {
+		return RolloutResult{}, ErrNotFound
+	}
+
+	if req.Container != "app" {
+		return RolloutResult{}, ErrNotFound
+	}
+
+	result := RolloutResult{
+		Namespace:       req.Namespace,
+		Deployment:      req.Deployment,
+		Container:       req.Container,
+		OldImage:        deployment.Image,
+		NewImage:        req.Image,
+		Generation:      2,
+		DryRun:          req.DryRun,
+		RolloutComplete: true,
+	}
+	if !req.DryRun {
+		deployment.Image = req.Image
+		s.deployments[key] = deployment
+	}
+	return result, nil
+}
+
+func handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	http.Redirect(w, r, "/console/", http.StatusMovedPermanently)
+}
+
+func handleConsoleRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/console/", http.StatusMovedPermanently)
+}
+
+func consoleHandler() http.Handler {
+	sub, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeError(w, http.StatusInternalServerError, "console unavailable")
+		})
+	}
+	fileServer := http.FileServer(http.FS(sub))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/console/" {
+			data, err := staticFS.ReadFile("static/console.html")
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "console unavailable")
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(data)
+			return
+		}
+
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = path.Clean(strings.TrimPrefix(r.URL.Path, "/console"))
+		if r2.URL.Path == "." {
+			r2.URL.Path = "/"
+		}
+		fileServer.ServeHTTP(w, r2)
+	})
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
