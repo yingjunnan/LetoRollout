@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -21,6 +22,8 @@ type ImageUpdateRequest = rollout.ImageUpdateRequest
 type RolloutResult = rollout.RolloutResult
 type DeploymentCreateRequest = rollout.DeploymentCreateRequest
 type DeploymentCreateResult = rollout.DeploymentCreateResult
+type DeploymentEnvVar = rollout.DeploymentEnvVar
+type DeploymentEnvSecret = rollout.DeploymentEnvSecret
 
 type RolloutService interface {
 	CreateDeployment(ctx context.Context, req DeploymentCreateRequest) (DeploymentCreateResult, error)
@@ -138,6 +141,13 @@ func trimCreateRequest(req DeploymentCreateRequest) DeploymentCreateRequest {
 	req.Namespace = strings.TrimSpace(req.Namespace)
 	req.Name = strings.TrimSpace(req.Name)
 	req.Image = strings.TrimSpace(req.Image)
+	for i := range req.Env {
+		req.Env[i].Name = strings.TrimSpace(req.Env[i].Name)
+		if req.Env[i].Secret != nil {
+			req.Env[i].Secret.Name = strings.TrimSpace(req.Env[i].Secret.Name)
+			req.Env[i].Secret.Key = strings.TrimSpace(req.Env[i].Secret.Key)
+		}
+	}
 	return req
 }
 
@@ -157,9 +167,28 @@ func validateCreateRequest(req DeploymentCreateRequest) error {
 		return errors.New("name is required")
 	case req.Image == "":
 		return errors.New("image is required")
-	default:
-		return nil
 	}
+
+	for i, env := range req.Env {
+		if env.Name == "" {
+			return fmt.Errorf("env[%d].name is required", i)
+		}
+		hasValue := env.Value != nil
+		hasSecret := env.Secret != nil
+		if hasValue == hasSecret {
+			return fmt.Errorf("env[%d] must set exactly one of value or secret", i)
+		}
+		if env.Secret != nil {
+			if env.Secret.Name == "" {
+				return fmt.Errorf("env[%d].secret.name is required", i)
+			}
+			if env.Secret.Key == "" {
+				return fmt.Errorf("env[%d].secret.key is required", i)
+			}
+		}
+	}
+
+	return nil
 }
 
 func validateRequest(req ImageUpdateRequest) error {

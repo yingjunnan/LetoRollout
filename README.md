@@ -23,9 +23,24 @@ curl -X POST http://localhost:8080/api/v1/deployments \
   -d '{
     "namespace": "default",
     "name": "nginx",
-    "image": "nginx:1.27.0"
+    "image": "nginx:1.27.0",
+    "env": [
+      { "name": "APP_ENV", "value": "prod" },
+      {
+        "name": "DATABASE_URL",
+        "secret": {
+          "name": "nginx-secret",
+          "key": "database-url"
+        }
+      }
+    ]
   }'
 ```
+
+The optional `env` array on create requests supports literal values and Secret
+key references. Each item must set `name` and exactly one of `value` or
+`secret`. Secret references use a Secret in the same namespace as the created
+Deployment.
 
 Update a Deployment image:
 

@@ -27,18 +27,31 @@ type RolloutResult struct {
 	RolloutComplete bool   `json:"rolloutComplete,omitempty"`
 }
 
+type DeploymentEnvSecret struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+type DeploymentEnvVar struct {
+	Name   string               `json:"name"`
+	Value  *string              `json:"value,omitempty"`
+	Secret *DeploymentEnvSecret `json:"secret,omitempty"`
+}
+
 type DeploymentCreateRequest struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Image     string `json:"image"`
+	Namespace string             `json:"namespace"`
+	Name      string             `json:"name"`
+	Image     string             `json:"image"`
+	Env       []DeploymentEnvVar `json:"env,omitempty"`
 }
 
 type DeploymentCreateResult struct {
-	Namespace  string            `json:"namespace"`
-	Name       string            `json:"name"`
-	Container  string            `json:"container"`
-	Image      string            `json:"image"`
-	Replicas   int32             `json:"replicas"`
-	Generation int64             `json:"generation"`
-	Labels     map[string]string `json:"labels,omitempty"`
+	Namespace  string             `json:"namespace"`
+	Name       string             `json:"name"`
+	Container  string             `json:"container"`
+	Image      string             `json:"image"`
+	Replicas   int32              `json:"replicas"`
+	Generation int64              `json:"generation"`
+	Labels     map[string]string  `json:"labels,omitempty"`
+	Env        []DeploymentEnvVar `json:"env,omitempty"`
 }

@@ -27,6 +27,8 @@ type ImageUpdateRequest = rollout.ImageUpdateRequest
 type RolloutResult = rollout.RolloutResult
 type DeploymentCreateRequest = rollout.DeploymentCreateRequest
 type DeploymentCreateResult = rollout.DeploymentCreateResult
+type DeploymentEnvVar = rollout.DeploymentEnvVar
+type DeploymentEnvSecret = rollout.DeploymentEnvSecret
 
 type DeploymentImageUpdater struct {
 	client             kubernetes.Interface
@@ -104,6 +106,7 @@ func (u *DeploymentImageUpdater) CreateDeployment(ctx context.Context, req Deplo
 						{
 							Name:  containerName,
 							Image: req.Image,
+							Env:   kubeEnvVars(req.Env),
 						},
 					},
 				},
@@ -132,7 +135,32 @@ func (u *DeploymentImageUpdater) CreateDeployment(ctx context.Context, req Deplo
 		Replicas:   createdReplicas,
 		Generation: created.Generation,
 		Labels:     created.Labels,
+		Env:        req.Env,
 	}, nil
+}
+
+func kubeEnvVars(env []DeploymentEnvVar) []corev1.EnvVar {
+	if len(env) == 0 {
+		return nil
+	}
+
+	out := make([]corev1.EnvVar, 0, len(env))
+	for _, item := range env {
+		kubeEnv := corev1.EnvVar{Name: item.Name}
+		if item.Value != nil {
+			kubeEnv.Value = *item.Value
+		}
+		if item.Secret != nil {
+			kubeEnv.ValueFrom = &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: item.Secret.Name},
+					Key:                  item.Secret.Key,
+				},
+			}
+		}
+		out = append(out, kubeEnv)
+	}
+	return out
 }
 
 func (u *DeploymentImageUpdater) UpdateImage(ctx context.Context, req ImageUpdateRequest) (RolloutResult, error) {

@@ -46,6 +46,46 @@ func TestCreateDeploymentCreatesMinimalDeployment(t *testing.T) {
 	}
 }
 
+func TestCreateDeploymentAddsLiteralAndSecretEnv(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	updater := NewDeploymentImageUpdater(client)
+
+	result, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
+		Namespace: "default",
+		Name:      "nginx",
+		Image:     "nginx:1.27.0",
+		Env: []DeploymentEnvVar{
+			{Name: "APP_ENV", Value: stringPtr("prod")},
+			{Name: "DATABASE_URL", Secret: &DeploymentEnvSecret{Name: "nginx-secret", Key: "database-url"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDeployment returned error: %v", err)
+	}
+
+	created, err := client.AppsV1().Deployments("default").Get(context.Background(), "nginx", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get created deployment: %v", err)
+	}
+
+	env := created.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 2 {
+		t.Fatalf("env length = %d, want 2: %+v", len(env), env)
+	}
+	if env[0].Name != "APP_ENV" || env[0].Value != "prod" || env[0].ValueFrom != nil {
+		t.Fatalf("env[0] = %+v, want literal APP_ENV=prod", env[0])
+	}
+	if env[1].Name != "DATABASE_URL" || env[1].ValueFrom == nil || env[1].ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("env[1] = %+v, want SecretKeyRef", env[1])
+	}
+	if env[1].ValueFrom.SecretKeyRef.Name != "nginx-secret" || env[1].ValueFrom.SecretKeyRef.Key != "database-url" {
+		t.Fatalf("secret ref = %+v, want nginx-secret/database-url", env[1].ValueFrom.SecretKeyRef)
+	}
+	if len(result.Env) != 2 || result.Env[0].Name != "APP_ENV" || result.Env[1].Secret == nil || result.Env[1].Secret.Name != "nginx-secret" {
+		t.Fatalf("result env = %+v, want accepted env", result.Env)
+	}
+}
+
 func TestCreateDeploymentRejectsDisallowedNamespace(t *testing.T) {
 	updater := NewDeploymentImageUpdater(fake.NewSimpleClientset(), UpdaterOptions{
 		AllowedNamespaces: []string{"dev"},
@@ -280,5 +320,9 @@ func deploymentFixture(namespace, name string, containers []corev1.Container) ru
 }
 
 func int32Ptr(v int32) *int32 {
+	return &v
+}
+
+func stringPtr(v string) *string {
 	return &v
 }
