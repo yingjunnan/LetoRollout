@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -45,32 +46,47 @@ func NewHandlerWithAuditWriter(service RolloutService, authToken string, audit i
 }
 
 type PreviewService struct {
-	deployments map[string]string // key: namespace/deployment -> image
+	deployments []rollout.DeploymentSummary
 }
 
 func NewPreviewService() *PreviewService {
-	return &PreviewService{
-		deployments: make(map[string]string),
+	return &PreviewService{}
+}
+
+// SeedDeployment registers a deployment in the preview store.
+func (s *PreviewService) SeedDeployment(d rollout.DeploymentSummary) {
+	s.deployments = append(s.deployments, d)
+}
+
+func (s *PreviewService) findDeployment(namespace, name string) (rollout.DeploymentSummary, int, bool) {
+	for i, d := range s.deployments {
+		if d.Namespace == namespace && d.Name == name {
+			return d, i, true
+		}
 	}
+	return rollout.DeploymentSummary{}, -1, false
 }
 
-// SeedDeployment registers a deployment image in the preview store.
-func (s *PreviewService) SeedDeployment(namespace, deployment, image string) {
-	s.deployments[namespace+"/"+deployment] = image
-}
-
-func (s *PreviewService) UpdateImage(ctx context.Context, req ImageUpdateRequest) (RolloutResult, error) {
-	key := req.Namespace + "/" + req.Deployment
-	oldImage, exists := s.deployments[key]
+func (s *PreviewService) UpdateImage(ctx context.Context, req rollout.ImageUpdateRequest) (rollout.RolloutResult, error) {
+	dep, idx, exists := s.findDeployment(req.Namespace, req.Deployment)
 	if !exists {
-		return RolloutResult{}, ErrNotFound
+		return rollout.RolloutResult{}, rollout.ErrNotFound
 	}
 
-	if req.Container != "app" {
-		return RolloutResult{}, ErrNotFound
+	var oldImage string
+	containerIndex := -1
+	for i, c := range dep.Containers {
+		if c.Name == req.Container {
+			containerIndex = i
+			oldImage = c.Image
+			break
+		}
+	}
+	if containerIndex == -1 {
+		return rollout.RolloutResult{}, rollout.ErrNotFound
 	}
 
-	result := RolloutResult{
+	result := rollout.RolloutResult{
 		Namespace:       req.Namespace,
 		Deployment:      req.Deployment,
 		Container:       req.Container,
@@ -81,9 +97,65 @@ func (s *PreviewService) UpdateImage(ctx context.Context, req ImageUpdateRequest
 		RolloutComplete: true,
 	}
 	if !req.DryRun {
-		s.deployments[key] = req.Image
+		s.deployments[idx].Containers[containerIndex].Image = req.Image
 	}
 	return result, nil
+}
+
+func (s *PreviewService) ListDeployments(ctx context.Context, namespace string) ([]rollout.DeploymentSummary, error) {
+	out := make([]rollout.DeploymentSummary, 0, len(s.deployments))
+	for _, d := range s.deployments {
+		if d.Namespace == namespace {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (s *PreviewService) GetDeployment(ctx context.Context, namespace, name string) (rollout.DeploymentDetail, error) {
+	d, _, ok := s.findDeployment(namespace, name)
+	if !ok {
+		return rollout.DeploymentDetail{}, rollout.ErrNotFound
+	}
+	return rollout.DeploymentDetail{DeploymentSummary: d, Selector: "app=" + name}, nil
+}
+
+func (s *PreviewService) StreamLogs(ctx context.Context, req rollout.LogRequest) (<-chan rollout.LogLine, error) {
+	if _, _, ok := s.findDeployment(req.Namespace, req.Deployment); !ok {
+		return nil, rollout.ErrNotFound
+	}
+	out := make(chan rollout.LogLine)
+	go func() {
+		defer close(out)
+		canned := []string{"[preview] line one", "[preview] line two", "[preview] line three"}
+		for _, l := range canned {
+			select {
+			case out <- rollout.LogLine{Line: l}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if !req.Follow {
+			return
+		}
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		i := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				select {
+				case out <- rollout.LogLine{Line: fmt.Sprintf("[preview] follow line %d", i)}:
+				case <-ctx.Done():
+					return
+				}
+				i++
+			}
+		}
+	}()
+	return out, nil
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
