@@ -14,6 +14,7 @@ import (
 	"letorollout/internal/config"
 	"letorollout/internal/httpapi"
 	"letorollout/internal/kube"
+	"letorollout/internal/rollout"
 )
 
 func main() {
@@ -26,7 +27,22 @@ func main() {
 
 	var service httpapi.Service
 	if cfg.LocalPreview {
-		service = httpapi.NewPreviewService()
+		preview := httpapi.NewPreviewService()
+		// seed a couple of fake deployments so the console has something to show
+		preview.SeedDeployment(rollout.DeploymentSummary{
+			Name: "api", Namespace: "default",
+			Replicas: 2, ReadyReplicas: 2,
+			Containers: []rollout.ContainerInfo{{Name: "app", Image: "nginx:1.27.0"}},
+		})
+		preview.SeedDeployment(rollout.DeploymentSummary{
+			Name: "web", Namespace: "default",
+			Replicas: 3, ReadyReplicas: 1,
+			Containers: []rollout.ContainerInfo{
+				{Name: "web", Image: "redis:7.2"},
+				{Name: "sidecar", Image: "busybox:1.36"},
+			},
+		})
+		service = preview
 		log.Printf("letorollout console preview enabled on %s", cfg.Addr)
 	} else {
 		updater, err := kube.NewInClusterDeploymentImageUpdater(kube.UpdaterOptions{
