@@ -29,6 +29,36 @@ For a local browser preview without Kubernetes, run the server with
 `LOCAL_PREVIEW=1`. That mode serves the same console and API shape from an
 in-memory backend so you can exercise the UI quickly.
 
+### Project Structure
+
+```text
+letorollout/
+├── cmd/server/main.go            # Entry point: load config, wire handler, graceful shutdown
+├── internal/
+│   ├── config/                  # Environment-based configuration
+│   ├── rollout/                 # Domain types & sentinel errors (shared contract)
+│   ├── httpapi/                 # HTTP layer: routing, validation, audit, embedded console
+│   │   └── static/              # Embedded frontend (vanilla JS, no build step)
+│   └── kube/                    # Kubernetes client implementation of RolloutService
+├── deploy/                      # RBAC + example Deployment manifests
+├── docs/superpowers/            # Design specs & implementation plans
+├── Dockerfile
+└── go.mod
+```
+
+### Architecture
+
+LetoRollout is layered around a shared domain contract so the HTTP layer never depends directly on Kubernetes:
+
+- `rollout` owns the request/result types and sentinel errors (`ErrNotFound`, `ErrForbidden`, `ErrAlreadyExists`). Both `httpapi` and `kube` depend on it, keeping error semantics consistent and mapping cleanly to HTTP status codes (404 / 403 / 409).
+- `httpapi` depends on a `RolloutService` interface rather than Kubernetes. That makes the HTTP layer unit-testable with a fake service and lets `LOCAL_PREVIEW=1` swap in an in-memory `PreviewService` so the console works without a cluster.
+- `kube.DeploymentImageUpdater` is the production implementation. It uses in-cluster credentials and applies two safety gates before any mutation: a namespace allowlist and a required Deployment label.
+- Every create or update writes one JSON audit line to stdout.
+
+Request flow: HTTP → trim & validate → service (kube or preview) → audit → JSON response.
+
+When extending the service, keep new request/result types and sentinel errors in `rollout`, implement behavior behind the `RolloutService` interface in `kube`, and expose it through `httpapi`. Frontend assets under `internal/httpapi/static/` are embedded via `//go:embed`, so a plain `go build` picks up changes with no separate build step.
+
 ### API
 
 Health check:
@@ -161,7 +191,37 @@ kubectl label deployment nginx letorollout/enabled=true -n default
 
 ## 中文
 
-LetoRollout 是一个运行在 Kubernetes 内部的小型 Go 服务，通过 HTTP API 更新 Deployment 的容器镜像。
+LetoRollout 是一个运行在 Kubernetes 内部的小型 Go 服务，通过 HTTP API 创建或更新 Deployment 的容器镜像。
+
+### 项目结构
+
+```text
+letorollout/
+├── cmd/server/main.go            # 入口：加载配置、组装 handler、优雅关闭
+├── internal/
+│   ├── config/                   # 基于环境变量的配置
+│   ├── rollout/                  # 领域类型与哨兵错误（共享契约）
+│   ├── httpapi/                  # HTTP 层：路由、校验、审计、内嵌控制台
+│   │   └── static/               # 内嵌前端（原生 JS，无需构建步骤）
+│   └── kube/                     # RolloutService 的 Kubernetes 客户端实现
+├── deploy/                       # RBAC 与示例 Deployment 清单
+├── docs/superpowers/             # 设计文档与实现计划
+├── Dockerfile
+└── go.mod
+```
+
+### 架构
+
+LetoRollout 围绕一份共享的领域契约分层设计，HTTP 层不直接依赖 Kubernetes：
+
+- `rollout` 持有请求/响应类型与哨兵错误（`ErrNotFound`、`ErrForbidden`、`ErrAlreadyExists`）。`httpapi` 与 `kube` 都依赖它，使错误语义保持一致，并能干净地映射到 HTTP 状态码（404 / 403 / 409）。
+- `httpapi` 依赖 `RolloutService` 接口而非 Kubernetes。这让 HTTP 层可以用 fake service 做单元测试，也让 `LOCAL_PREVIEW=1` 能用内存版 `PreviewService` 替换实现，使控制台在没有集群时也能运行。
+- `kube.DeploymentImageUpdater` 是生产实现。它使用集群内凭证，并在任何变更前施加两道安全闸门：namespace 白名单和必需的 Deployment 标签。
+- 每次创建或更新都会向 stdout 写入一行 JSON 审计日志。
+
+请求流程：HTTP → 裁剪与校验 → service（kube 或 preview）→ 审计 → JSON 响应。
+
+扩展服务时，请把新的请求/响应类型与哨兵错误放在 `rollout`，在 `kube` 中通过 `RolloutService` 接口实现行为，并在 `httpapi` 暴露出来。`internal/httpapi/static/` 下的前端资源通过 `//go:embed` 内嵌，普通 `go build` 即可打包变更，无需单独的构建步骤。
 
 ### API
 
