@@ -2,14 +2,12 @@ package kube
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -25,10 +23,6 @@ var ErrAlreadyExists = rollout.ErrAlreadyExists
 
 type ImageUpdateRequest = rollout.ImageUpdateRequest
 type RolloutResult = rollout.RolloutResult
-type DeploymentCreateRequest = rollout.DeploymentCreateRequest
-type DeploymentCreateResult = rollout.DeploymentCreateResult
-type DeploymentEnvVar = rollout.DeploymentEnvVar
-type DeploymentEnvSecret = rollout.DeploymentEnvSecret
 
 type DeploymentImageUpdater struct {
 	client             kubernetes.Interface
@@ -63,104 +57,6 @@ func NewInClusterDeploymentImageUpdater(options UpdaterOptions) (*DeploymentImag
 	}
 
 	return NewDeploymentImageUpdater(client, options), nil
-}
-
-func (u *DeploymentImageUpdater) CreateDeployment(ctx context.Context, req DeploymentCreateRequest) (DeploymentCreateResult, error) {
-	if !u.namespaceAllowed(req.Namespace) {
-		return DeploymentCreateResult{}, fmt.Errorf("%w: namespace %s is not allowed", ErrForbidden, req.Namespace)
-	}
-
-	const containerName = "app"
-	const replicas = int32(1)
-
-	selectorLabels := map[string]string{
-		"letorollout.io/deployment-id": deploymentSelectorID(req.Name),
-	}
-	labels := map[string]string{
-		"app.kubernetes.io/managed-by": "letorollout",
-	}
-	for key, value := range selectorLabels {
-		labels[key] = value
-	}
-	if u.requiredLabelKey != "" {
-		labels[u.requiredLabelKey] = u.requiredLabelValue
-	}
-
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: req.Namespace,
-			Name:      req.Name,
-			Labels:    labels,
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: int32ValuePtr(replicas),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: selectorLabels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  containerName,
-							Image: req.Image,
-							Env:   kubeEnvVars(req.Env),
-						},
-					},
-				},
-			},
-		},
-	}
-
-	created, err := u.client.AppsV1().Deployments(req.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
-	if err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return DeploymentCreateResult{}, fmt.Errorf("%w: deployment %s/%s", rollout.ErrAlreadyExists, req.Namespace, req.Name)
-		}
-		return DeploymentCreateResult{}, fmt.Errorf("create deployment %s/%s: %w", req.Namespace, req.Name, err)
-	}
-
-	createdReplicas := replicas
-	if created.Spec.Replicas != nil {
-		createdReplicas = *created.Spec.Replicas
-	}
-
-	return DeploymentCreateResult{
-		Namespace:  created.Namespace,
-		Name:       created.Name,
-		Container:  containerName,
-		Image:      req.Image,
-		Replicas:   createdReplicas,
-		Generation: created.Generation,
-		Labels:     created.Labels,
-		Env:        req.Env,
-	}, nil
-}
-
-func kubeEnvVars(env []DeploymentEnvVar) []corev1.EnvVar {
-	if len(env) == 0 {
-		return nil
-	}
-
-	out := make([]corev1.EnvVar, 0, len(env))
-	for _, item := range env {
-		kubeEnv := corev1.EnvVar{Name: item.Name}
-		if item.Value != nil {
-			kubeEnv.Value = *item.Value
-		}
-		if item.Secret != nil {
-			kubeEnv.ValueFrom = &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: item.Secret.Name},
-					Key:                  item.Secret.Key,
-				},
-			}
-		}
-		out = append(out, kubeEnv)
-	}
-	return out
 }
 
 func (u *DeploymentImageUpdater) UpdateImage(ctx context.Context, req ImageUpdateRequest) (RolloutResult, error) {
@@ -232,15 +128,6 @@ func (u *DeploymentImageUpdater) UpdateImage(ctx context.Context, req ImageUpdat
 	}
 
 	return result, nil
-}
-
-func deploymentSelectorID(name string) string {
-	sum := sha256.Sum256([]byte(name))
-	return fmt.Sprintf("d-%x", sum[:8])
-}
-
-func int32ValuePtr(v int32) *int32 {
-	return &v
 }
 
 func namespaceSet(namespaces []string) map[string]struct{} {

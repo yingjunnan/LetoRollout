@@ -5,6 +5,8 @@ import "errors"
 var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("forbidden")
 var ErrAlreadyExists = errors.New("already exists")
+var ErrUnauthorized = errors.New("token missing or invalid")
+var ErrTokenExpired = errors.New("token expired")
 
 type ImageUpdateRequest struct {
 	Namespace      string `json:"namespace"`
@@ -25,33 +27,4 @@ type RolloutResult struct {
 	Generation      int64  `json:"generation"`
 	DryRun          bool   `json:"dryRun,omitempty"`
 	RolloutComplete bool   `json:"rolloutComplete,omitempty"`
-}
-
-type DeploymentEnvSecret struct {
-	Name string `json:"name"`
-	Key  string `json:"key"`
-}
-
-type DeploymentEnvVar struct {
-	Name   string               `json:"name"`
-	Value  *string              `json:"value,omitempty"`
-	Secret *DeploymentEnvSecret `json:"secret,omitempty"`
-}
-
-type DeploymentCreateRequest struct {
-	Namespace string             `json:"namespace"`
-	Name      string             `json:"name"`
-	Image     string             `json:"image"`
-	Env       []DeploymentEnvVar `json:"env,omitempty"`
-}
-
-type DeploymentCreateResult struct {
-	Namespace  string             `json:"namespace"`
-	Name       string             `json:"name"`
-	Container  string             `json:"container"`
-	Image      string             `json:"image"`
-	Replicas   int32              `json:"replicas"`
-	Generation int64              `json:"generation"`
-	Labels     map[string]string  `json:"labels,omitempty"`
-	Env        []DeploymentEnvVar `json:"env,omitempty"`
 }
