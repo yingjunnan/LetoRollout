@@ -133,6 +133,26 @@ func TestConsoleRedirectsToTrailingSlash(t *testing.T) {
 	}
 }
 
+func TestConsoleServesIndexHTML(t *testing.T) {
+	h, _, _ := newTestHandler(t, nil)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/console/", nil)
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("content type = %q, want text/html; charset=utf-8", got)
+	}
+	// the React build's index.html mounts #root and loads the JS bundle
+	body := rr.Body.String()
+	if !strings.Contains(body, "id=\"root\"") {
+		t.Fatalf("index.html missing root mount point; body=%s", body)
+	}
+}
+
 func TestUserRoutesRequireToken(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
 

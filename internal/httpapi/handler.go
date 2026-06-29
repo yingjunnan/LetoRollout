@@ -207,7 +207,7 @@ func consoleHandler() http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/console/" {
-			data, err := staticFS.ReadFile("static/console.html")
+			data, err := staticFS.ReadFile("static/index.html")
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "console unavailable")
 				return
