@@ -20,7 +20,7 @@ func main() {
 
 	var handler http.Handler
 	if cfg.LocalPreview {
-		handler = httpapi.NewHandler(httpapi.NewPreviewService(), cfg.AuthToken)
+		handler = httpapi.NewHandler(httpapi.NewPreviewService(), cfg.AdminToken)
 		log.Printf("letorollout console preview enabled on %s", cfg.Addr)
 	} else {
 		updater, err := kube.NewInClusterDeploymentImageUpdater(kube.UpdaterOptions{
@@ -30,7 +30,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("create deployment image updater: %v", err)
 		}
-		handler = httpapi.NewHandler(updater, cfg.AuthToken)
+		handler = httpapi.NewHandler(updater, cfg.AdminToken)
 	}
 
 	server := &http.Server{
