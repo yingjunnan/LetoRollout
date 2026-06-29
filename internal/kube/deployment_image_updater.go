@@ -1,15 +1,19 @@
 package kube
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -128,6 +132,117 @@ func (u *DeploymentImageUpdater) UpdateImage(ctx context.Context, req ImageUpdat
 	}
 
 	return result, nil
+}
+
+func (u *DeploymentImageUpdater) ListDeployments(ctx context.Context, namespace string) ([]rollout.DeploymentSummary, error) {
+	deps, err := u.client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list deployments %s: %w", namespace, err)
+	}
+	out := make([]rollout.DeploymentSummary, 0, len(deps.Items))
+	for _, d := range deps.Items {
+		out = append(out, toSummary(d))
+	}
+	return out, nil
+}
+
+func (u *DeploymentImageUpdater) GetDeployment(ctx context.Context, namespace, name string) (rollout.DeploymentDetail, error) {
+	d, err := u.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return rollout.DeploymentDetail{}, fmt.Errorf("%w: deployment %s/%s", rollout.ErrNotFound, namespace, name)
+		}
+		return rollout.DeploymentDetail{}, fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
+	}
+	selector := ""
+	if d.Spec.Selector != nil {
+		selector = labels.Set(d.Spec.Selector.MatchLabels).String()
+	}
+	return rollout.DeploymentDetail{DeploymentSummary: toSummary(*d), Selector: selector}, nil
+}
+
+func (u *DeploymentImageUpdater) StreamLogs(ctx context.Context, req rollout.LogRequest) (<-chan rollout.LogLine, error) {
+	d, err := u.client.AppsV1().Deployments(req.Namespace).Get(ctx, req.Deployment, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: deployment %s/%s", rollout.ErrNotFound, req.Namespace, req.Deployment)
+		}
+		return nil, fmt.Errorf("get deployment %s/%s: %w", req.Namespace, req.Deployment, err)
+	}
+
+	var selector labels.Selector
+	if d.Spec.Selector != nil {
+		selector, err = metav1.LabelSelectorAsSelector(d.Spec.Selector)
+		if err != nil {
+			return nil, fmt.Errorf("parse deployment selector: %w", err)
+		}
+	} else {
+		selector = labels.Everything()
+	}
+
+	pods, err := u.client.CoreV1().Pods(req.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
+	if err != nil {
+		return nil, fmt.Errorf("list pods %s: %w", req.Namespace, err)
+	}
+	if len(pods.Items) == 0 {
+		return nil, fmt.Errorf("%w: no pods for deployment %s/%s", rollout.ErrNotFound, req.Namespace, req.Deployment)
+	}
+
+	// deterministic: first by name, so log source is stable across requests
+	sort.Slice(pods.Items, func(i, j int) bool { return pods.Items[i].Name < pods.Items[j].Name })
+	pod := pods.Items[0]
+
+	container := req.Container
+	if container == "" && len(pod.Spec.Containers) > 0 {
+		container = pod.Spec.Containers[0].Name
+	}
+
+	opts := &corev1.PodLogOptions{Container: container, Previous: req.Previous, Follow: req.Follow}
+	if req.TailLines > 0 {
+		opts.TailLines = &req.TailLines
+	}
+
+	stream, err := u.client.CoreV1().Pods(req.Namespace).GetLogs(pod.Name, opts).Stream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open log stream %s/%s: %w", req.Namespace, pod.Name, err)
+	}
+
+	out := make(chan rollout.LogLine)
+	go func() {
+		defer close(out)
+		defer stream.Close()
+		scanner := bufio.NewScanner(stream)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			select {
+			case out <- rollout.LogLine{Line: scanner.Text()}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			out <- rollout.LogLine{Error: err}
+		}
+	}()
+	return out, nil
+}
+
+func toSummary(d appsv1.Deployment) rollout.DeploymentSummary {
+	containers := make([]rollout.ContainerInfo, 0, len(d.Spec.Template.Spec.Containers))
+	for _, c := range d.Spec.Template.Spec.Containers {
+		containers = append(containers, rollout.ContainerInfo{Name: c.Name, Image: c.Image})
+	}
+	var replicas int32
+	if d.Spec.Replicas != nil {
+		replicas = *d.Spec.Replicas
+	}
+	return rollout.DeploymentSummary{
+		Name:          d.Name,
+		Namespace:     d.Namespace,
+		Replicas:      replicas,
+		ReadyReplicas: d.Status.ReadyReplicas,
+		Containers:    containers,
+	}
 }
 
 func namespaceSet(namespaces []string) map[string]struct{} {
