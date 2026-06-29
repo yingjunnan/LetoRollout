@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"letorollout/internal/auth"
 	"letorollout/internal/rollout"
 )
 
@@ -23,25 +25,56 @@ var staticFS embed.FS
 var ErrNotFound = rollout.ErrNotFound
 var ErrForbidden = rollout.ErrForbidden
 var ErrAlreadyExists = rollout.ErrAlreadyExists
+var ErrUnauthorized = rollout.ErrUnauthorized
+var ErrTokenExpired = rollout.ErrTokenExpired
 
 type ImageUpdateRequest = rollout.ImageUpdateRequest
 type RolloutResult = rollout.RolloutResult
 
-type RolloutService interface {
-	UpdateImage(ctx context.Context, req ImageUpdateRequest) (RolloutResult, error)
+// Service is the union of the read/write/log capabilities a handler needs.
+// Both kube.DeploymentImageUpdater and PreviewService satisfy it.
+type Service interface {
+	rollout.ImageUpdater
+	rollout.DeploymentReader
+	rollout.LogStreamer
 }
 
-func NewHandler(service RolloutService, authToken string) http.Handler {
-	return NewHandlerWithAuditWriter(service, authToken, os.Stdout)
+// Config holds the per-handler configuration wired in main.
+type Config struct {
+	AdminToken   string
+	LogTailLines int64
 }
 
-func NewHandlerWithAuditWriter(service RolloutService, authToken string, audit io.Writer) http.Handler {
+func NewHandler(cfg Config, service Service, store *auth.TokenStore) http.Handler {
+	return NewHandlerWithAuditWriter(cfg, service, store, os.Stdout)
+}
+
+func NewHandlerWithAuditWriter(cfg Config, service Service, store *auth.TokenStore, audit io.Writer) http.Handler {
+	userMw := authMiddleware(store)
+	adminMw := adminMiddleware(cfg.AdminToken)
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", handleHealthz)
-	mux.HandleFunc("/", handleRoot)
-	mux.HandleFunc("/console", handleConsoleRedirect)
-	mux.Handle("/console/", consoleHandler())
-	mux.HandleFunc("/api/v1/deployments/image", handleUpdateImage(service, authToken, audit))
+	mux.HandleFunc("GET /healthz", handleHealthz)
+	mux.HandleFunc("GET /", handleRoot)
+	mux.HandleFunc("GET /console", handleConsoleRedirect)
+	mux.Handle("GET /console/", consoleHandler())
+
+	// auth (accepts either a user token or the admin token, so verify can
+	// report which kind it is)
+	mux.Handle("POST /api/v1/auth/verify", authOrAdminMiddleware(store, cfg.AdminToken)(handleVerify(cfg.AdminToken)))
+
+	// user (token-scoped)
+	mux.Handle("GET /api/v1/namespaces/{ns}/deployments", userMw(handleListDeployments(service)))
+	mux.Handle("GET /api/v1/namespaces/{ns}/deployments/{name}", userMw(handleGetDeployment(service)))
+	mux.Handle("POST /api/v1/namespaces/{ns}/deployments/{name}/image", userMw(handleUpdateImage(service, audit)))
+	mux.Handle("GET /api/v1/namespaces/{ns}/deployments/{name}/logs", userMw(handleLogs(service, cfg.LogTailLines)))
+	mux.Handle("GET /api/v1/namespaces/{ns}/deployments/{name}/logs/stream", userMw(handleLogsStream(service, cfg.LogTailLines)))
+
+	// admin
+	mux.Handle("GET /api/v1/admin/tokens", adminMw(handleAdminListTokens(store)))
+	mux.Handle("POST /api/v1/admin/tokens", adminMw(handleAdminCreateToken(store)))
+	mux.Handle("DELETE /api/v1/admin/tokens/{id}", adminMw(handleAdminDeleteToken(store)))
+
 	return mux
 }
 
@@ -208,24 +241,24 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func handleUpdateImage(service RolloutService, authToken string, audit io.Writer) http.HandlerFunc {
+func handleUpdateImage(service Service, audit io.Writer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		if authToken != "" && r.Header.Get("Authorization") != "Bearer "+authToken {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+		rec := tokenFromContext(r.Context())
+		ns, name := r.PathValue("ns"), r.PathValue("name")
+		if !rec.Allows(ns, name) {
+			writeServiceError(w, rollout.ErrForbidden)
 			return
 		}
 
-		var req ImageUpdateRequest
+		var req rollout.ImageUpdateRequest
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
+		req.Namespace = ns
+		req.Deployment = name
 		req = trimRequest(req)
 		if err := validateRequest(req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -235,20 +268,195 @@ func handleUpdateImage(service RolloutService, authToken string, audit io.Writer
 		result, err := service.UpdateImage(r.Context(), req)
 		writeAudit(audit, req, result, err)
 		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				writeError(w, http.StatusNotFound, err.Error())
-				return
-			}
-			if errors.Is(err, ErrForbidden) {
-				writeError(w, http.StatusForbidden, err.Error())
-				return
-			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeServiceError(w, err)
 			return
 		}
 
 		writeJSON(w, http.StatusOK, result)
 	}
+}
+
+func handleListDeployments(service Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rec := tokenFromContext(r.Context())
+		ns := r.PathValue("ns")
+		if !rec.Allows(ns, "") {
+			writeServiceError(w, rollout.ErrForbidden)
+			return
+		}
+		deps, err := service.ListDeployments(r.Context(), ns)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, deps)
+	}
+}
+
+func handleGetDeployment(service Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rec := tokenFromContext(r.Context())
+		ns, name := r.PathValue("ns"), r.PathValue("name")
+		if !rec.Allows(ns, name) {
+			writeServiceError(w, rollout.ErrForbidden)
+			return
+		}
+		d, err := service.GetDeployment(r.Context(), ns, name)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, d)
+	}
+}
+
+func handleLogs(service Service, defaultTail int64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rec := tokenFromContext(r.Context())
+		ns, name := r.PathValue("ns"), r.PathValue("name")
+		if !rec.Allows(ns, name) {
+			writeServiceError(w, rollout.ErrForbidden)
+			return
+		}
+		req := rollout.LogRequest{
+			Namespace:  ns,
+			Deployment: name,
+			Container:  r.URL.Query().Get("container"),
+			Previous:   r.URL.Query().Has("previous"),
+		}
+		req.TailLines = parseTailLines(r, defaultTail)
+		ch, err := service.StreamLogs(r.Context(), req)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		flusher, _ := w.(http.Flusher)
+		for ll := range ch {
+			if ll.Error != nil {
+				return
+			}
+			fmt.Fprintln(w, ll.Line)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}
+}
+
+func handleLogsStream(service Service, defaultTail int64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rec := tokenFromContext(r.Context())
+		ns, name := r.PathValue("ns"), r.PathValue("name")
+		if !rec.Allows(ns, name) {
+			writeServiceError(w, rollout.ErrForbidden)
+			return
+		}
+		req := rollout.LogRequest{
+			Namespace:  ns,
+			Deployment: name,
+			Container:  r.URL.Query().Get("container"),
+			Previous:   r.URL.Query().Has("previous"),
+			Follow:     true,
+		}
+		req.TailLines = parseTailLines(r, defaultTail)
+		ch, err := service.StreamLogs(r.Context(), req)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case ll, ok := <-ch:
+				if !ok {
+					return
+				}
+				if ll.Error != nil {
+					fmt.Fprintf(w, "event: error\ndata: {\"error\":%q}\n\n", ll.Error.Error())
+					if flusher != nil {
+						flusher.Flush()
+					}
+					return
+				}
+				fmt.Fprintf(w, "event: log\ndata: {\"line\":%q}\n\n", ll.Line)
+				if flusher != nil {
+					flusher.Flush()
+				}
+			case <-ticker.C:
+				fmt.Fprintf(w, ":keepalive\n\n")
+				if flusher != nil {
+					flusher.Flush()
+				}
+			case <-r.Context().Done():
+				return
+			}
+		}
+	}
+}
+
+func handleVerify(adminToken string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rec := tokenFromContext(r.Context())
+		isAdmin := subtle.ConstantTimeCompare([]byte(rec.Token), []byte(adminToken)) == 1
+		type scopeJSON struct {
+			Namespace  string `json:"namespace"`
+			Deployment string `json:"deployment"`
+		}
+		scopes := make([]scopeJSON, 0, len(rec.Scopes))
+		for _, s := range rec.Scopes {
+			scopes = append(scopes, scopeJSON{Namespace: s.Namespace, Deployment: s.Deployment})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"isAdmin": isAdmin, "scopes": scopes})
+	}
+}
+
+func handleAdminListTokens(store *auth.TokenStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, store.List())
+	}
+}
+
+func handleAdminCreateToken(store *auth.TokenStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req auth.TokenRecord
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		// force the server to mint id/token/createdAt
+		req.ID, req.Token, req.CreatedAt = "", "", time.Time{}
+		rec, err := store.Create(req)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rec) // plaintext token returned once
+	}
+}
+
+func handleAdminDeleteToken(store *auth.TokenStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := store.Delete(r.PathValue("id")); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func parseTailLines(r *http.Request, defaultTail int64) int64 {
+	if t := r.URL.Query().Get("tailLines"); t != "" {
+		var n int64
+		if _, err := fmt.Sscanf(t, "%d", &n); err == nil {
+			return n
+		}
+	}
+	return defaultTail
 }
 
 func trimRequest(req ImageUpdateRequest) ImageUpdateRequest {
@@ -282,6 +490,25 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// writeServiceError maps a service-layer error to an HTTP status using the
+// rollout sentinel errors. Unknown errors become 500.
+func writeServiceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, rollout.ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, rollout.ErrForbidden):
+		writeError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, rollout.ErrAlreadyExists):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, rollout.ErrUnauthorized), errors.Is(err, rollout.ErrTokenExpired):
+		writeError(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, auth.ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func writeAudit(out io.Writer, req ImageUpdateRequest, result RolloutResult, err error) {

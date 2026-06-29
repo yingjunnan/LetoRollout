@@ -154,6 +154,7 @@ func TestPreviewStreamLogsFollowEmitsThenCancels(t *testing.T) {
 		Containers: []rollout.ContainerInfo{{Name: "api"}},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	ch, err := svc.StreamLogs(ctx, rollout.LogRequest{Namespace: "default", Deployment: "api", Follow: true})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)

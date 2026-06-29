@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"letorollout/internal/auth"
 	"letorollout/internal/config"
 	"letorollout/internal/httpapi"
 	"letorollout/internal/kube"
@@ -18,9 +19,14 @@ import (
 func main() {
 	cfg := config.Load()
 
-	var handler http.Handler
+	store, err := auth.LoadStore(cfg.TokensPath)
+	if err != nil {
+		log.Fatalf("load token store: %v", err)
+	}
+
+	var service httpapi.Service
 	if cfg.LocalPreview {
-		handler = httpapi.NewHandler(httpapi.NewPreviewService(), cfg.AdminToken)
+		service = httpapi.NewPreviewService()
 		log.Printf("letorollout console preview enabled on %s", cfg.Addr)
 	} else {
 		updater, err := kube.NewInClusterDeploymentImageUpdater(kube.UpdaterOptions{
@@ -30,8 +36,13 @@ func main() {
 		if err != nil {
 			log.Fatalf("create deployment image updater: %v", err)
 		}
-		handler = httpapi.NewHandler(updater, cfg.AdminToken)
+		service = updater
 	}
+
+	handler := httpapi.NewHandler(httpapi.Config{
+		AdminToken:   cfg.AdminToken,
+		LogTailLines: cfg.LogTailLines,
+	}, service, store)
 
 	server := &http.Server{
 		Addr:              cfg.Addr,

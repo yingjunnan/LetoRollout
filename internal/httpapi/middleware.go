@@ -44,6 +44,31 @@ func authMiddleware(store *auth.TokenStore) func(http.Handler) http.Handler {
 	}
 }
 
+// authOrAdminMiddleware accepts either a scoped user token (from the store) or
+// the admin token. It is used by /api/v1/auth/verify so the endpoint can tell
+// the frontend whether the supplied token is a user or admin token.
+func authOrAdminMiddleware(store *auth.TokenStore, adminToken string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tok := bearerToken(r)
+			if adminToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(adminToken)) == 1 {
+				// synthesize an admin record so handleVerify can mark isAdmin
+				rec := auth.TokenRecord{Token: tok, Label: "admin", Scopes: []auth.TokenScope{{Namespace: "*"}}}
+				ctx := context.WithValue(r.Context(), ctxKey{}, &rec)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			rec, err := store.Verify(tok)
+			if err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			ctx := context.WithValue(r.Context(), ctxKey{}, &rec)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 // adminMiddleware gates routes that mint or delete user tokens. It compares
 // the bearer against ADMIN_TOKEN with a constant-time compare. When
 // ADMIN_TOKEN is empty the admin API is disabled entirely (503).
