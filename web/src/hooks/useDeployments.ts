@@ -7,12 +7,16 @@ import { useSession, useToasts } from "../state/store";
 export function useDeployments() {
   const token = useSession((s) => s.token)!;
   const scopes = useSession((s) => s.scopes);
+  const isAdmin = useSession((s) => s.isAdmin);
   const logout = useSession((s) => s.logout);
   const push = useToasts((s) => s.push);
   const [deployments, setDeployments] = useState<DeploymentSummary[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
+    // Admin tokens have no entries in the token store, so the user routes
+    // would 401. An admin manages tokens, not Deployments — skip the fetch.
+    if (isAdmin) return;
     const namespaces = Array.from(
       new Set(scopes.map((s) => s.namespace).filter(Boolean))
     );
@@ -32,7 +36,7 @@ export function useDeployments() {
     } finally {
       setLoading(false);
     }
-  }, [token, scopes, logout, push]);
+  }, [token, scopes, isAdmin, logout, push]);
 
   useEffect(() => {
     refresh();

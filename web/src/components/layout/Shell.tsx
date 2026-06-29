@@ -17,7 +17,9 @@ export function Shell() {
 
   const [selected, setSelected] = useState<DeploymentSummary | null>(null);
   const [tab, setTab] = useState<Tab>("image");
-  const [showAdmin, setShowAdmin] = useState(false);
+  // An admin lands on the token-management panel; they can switch back to the
+  // (empty) console via the topbar toggle.
+  const [showAdmin, setShowAdmin] = useState(isAdmin);
 
   return (
     <div className="min-h-screen flex flex-col bg-bg">
