@@ -22,12 +22,6 @@ import (
 //go:embed static/*
 var staticFS embed.FS
 
-var ErrNotFound = rollout.ErrNotFound
-var ErrForbidden = rollout.ErrForbidden
-var ErrAlreadyExists = rollout.ErrAlreadyExists
-var ErrUnauthorized = rollout.ErrUnauthorized
-var ErrTokenExpired = rollout.ErrTokenExpired
-
 type ImageUpdateRequest = rollout.ImageUpdateRequest
 type RolloutResult = rollout.RolloutResult
 
@@ -424,7 +418,9 @@ func handleAdminListTokens(store *auth.TokenStore) http.HandlerFunc {
 func handleAdminCreateToken(store *auth.TokenStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req auth.TokenRecord
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
