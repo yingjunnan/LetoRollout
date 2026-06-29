@@ -23,12 +23,16 @@ spec:
           env:
             - name: ADDR
               value: ":8080"
-            - name: AUTH_TOKEN
+            - name: ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: letorollout-auth
-                  key: token
+                  name: letorollout-admin-auth
+                  key: admin-token
                   optional: true
+            - name: TOKENS_PATH
+              value: "/data/tokens.json"
+            - name: LOG_TAIL_LINES
+              value: "500"
             - name: ALLOWED_NAMESPACES
               value: ""
             - name: REQUIRED_DEPLOYMENT_LABEL
@@ -44,6 +48,13 @@ spec:
             httpGet:
               path: /healthz
               port: http
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: letorollout-data
 ---
 apiVersion: v1
 kind: Service
