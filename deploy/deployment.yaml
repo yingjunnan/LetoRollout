@@ -18,7 +18,7 @@ spec:
       serviceAccountName: letorollout
       containers:
         - name: letorollout
-          image: yingjunnan/letorollout:latest
+          image: blichus/letorollout:latest
           imagePullPolicy: Always
           env:
             - name: ADDR
