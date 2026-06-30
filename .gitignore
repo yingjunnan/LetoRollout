@@ -1,0 +1,23 @@
+# build artifacts
+/server
+/server.exe
+/letorollout
+/letorollout-preview.exe
+*.exe
+
+# visual brainstorming companion (session artifacts)
+/.superpowers/
+
+# local token store for preview dev
+/tokens.json
+
+# node / vite
+/web/node_modules/
+/web/dist/
+/web/*.tsbuildinfo
+/web/vite.config.d.ts
+/web/vite.config.js
+/internal/httpapi/.tmp
+
+# git worktrees
+/.worktrees/

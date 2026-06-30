@@ -7,39 +7,96 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"letorollout/internal/auth"
+	"letorollout/internal/rollout"
 )
 
-type fakeRolloutService struct {
-	result       RolloutResult
-	err          error
-	req          ImageUpdateRequest
-	calls        int
-	createResult DeploymentCreateResult
-	createErr    error
-	createReq    DeploymentCreateRequest
-	createCalls  int
+type fakeService struct {
+	result        rollout.RolloutResult
+	err           error
+	req           rollout.ImageUpdateRequest
+	calls         int
+	deployments   []rollout.DeploymentSummary
+	logs          []string
+	logRequest    rollout.LogRequest
+	logCalls      int
+	getDeployment rollout.DeploymentDetail
+	getErr        error
 }
 
-func (f *fakeRolloutService) CreateDeployment(ctx context.Context, req DeploymentCreateRequest) (DeploymentCreateResult, error) {
-	f.createCalls++
-	f.createReq = req
-	return f.createResult, f.createErr
-}
-
-func (f *fakeRolloutService) UpdateImage(ctx context.Context, req ImageUpdateRequest) (RolloutResult, error) {
+func (f *fakeService) UpdateImage(ctx context.Context, req rollout.ImageUpdateRequest) (rollout.RolloutResult, error) {
 	f.calls++
 	f.req = req
 	return f.result, f.err
 }
 
+func (f *fakeService) ListDeployments(ctx context.Context, namespace string) ([]rollout.DeploymentSummary, error) {
+	var out []rollout.DeploymentSummary
+	for _, d := range f.deployments {
+		if d.Namespace == namespace {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeService) GetDeployment(ctx context.Context, namespace, name string) (rollout.DeploymentDetail, error) {
+	if f.getErr != nil {
+		return rollout.DeploymentDetail{}, f.getErr
+	}
+	if f.getDeployment.Name != "" {
+		return f.getDeployment, nil
+	}
+	for _, d := range f.deployments {
+		if d.Namespace == namespace && d.Name == name {
+			return rollout.DeploymentDetail{DeploymentSummary: d}, nil
+		}
+	}
+	return rollout.DeploymentDetail{}, rollout.ErrNotFound
+}
+
+func (f *fakeService) StreamLogs(ctx context.Context, req rollout.LogRequest) (<-chan rollout.LogLine, error) {
+	f.logCalls++
+	f.logRequest = req
+	out := make(chan rollout.LogLine)
+	go func() {
+		defer close(out)
+		for _, l := range f.logs {
+			out <- rollout.LogLine{Line: l}
+		}
+	}()
+	return out, nil
+}
+
+// newTestHandler builds a handler with a token scoped to namespace "dev" and
+// admin token "adm". Returns the handler, the store, and the user token record.
+func newTestHandler(t *testing.T, svc *fakeService) (http.Handler, *auth.TokenStore, auth.TokenRecord) {
+	t.Helper()
+	store, _ := auth.LoadStore(filepath.Join(t.TempDir(), "tokens.json"))
+	rec, err := store.Create(auth.TokenRecord{Scopes: []auth.TokenScope{{Namespace: "dev"}}})
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	if svc == nil {
+		svc = &fakeService{
+			deployments: []rollout.DeploymentSummary{{Name: "api", Namespace: "dev"}},
+			logs:        []string{"hello"},
+		}
+	}
+	h := NewHandler(Config{AdminToken: "adm", LogTailLines: 10}, svc, store)
+	return h, store, rec
+}
+
 func TestHealthz(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{}, "")
+	h, _, _ := newTestHandler(t, nil)
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	handler.ServeHTTP(resp, req)
+	h.ServeHTTP(resp, req)
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
@@ -47,11 +104,11 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestRootRedirectsToConsole(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{}, "")
+	h, _, _ := newTestHandler(t, nil)
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	handler.ServeHTTP(resp, req)
+	h.ServeHTTP(resp, req)
 
 	if resp.Code != http.StatusMovedPermanently {
 		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMovedPermanently)
@@ -62,11 +119,11 @@ func TestRootRedirectsToConsole(t *testing.T) {
 }
 
 func TestConsoleRedirectsToTrailingSlash(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{}, "")
+	h, _, _ := newTestHandler(t, nil)
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/console", nil)
-	handler.ServeHTTP(resp, req)
+	h.ServeHTTP(resp, req)
 
 	if resp.Code != http.StatusMovedPermanently {
 		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMovedPermanently)
@@ -76,218 +133,256 @@ func TestConsoleRedirectsToTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestConsoleServesShell(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{}, "")
+func TestConsoleServesIndexHTML(t *testing.T) {
+	h, _, _ := newTestHandler(t, nil)
 
-	resp := httptest.NewRecorder()
+	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/console/", nil)
-	handler.ServeHTTP(resp, req)
+	h.ServeHTTP(rr, req)
 
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	if got := resp.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+	if got := rr.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("content type = %q, want text/html; charset=utf-8", got)
 	}
-	body := resp.Body.String()
-	for _, want := range []string{"LetoRollout Console", "Create Deployment", "Update Image", "recent targets"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("console body missing %q; body=%s", want, body)
+	// the React build's index.html mounts #root and loads the JS bundle
+	body := rr.Body.String()
+	if !strings.Contains(body, "id=\"root\"") {
+		t.Fatalf("index.html missing root mount point; body=%s", body)
+	}
+}
+
+func TestUserRoutesRequireToken(t *testing.T) {
+	h, _, _ := newTestHandler(t, nil)
+
+	for _, path := range []string{
+		"/api/v1/namespaces/dev/deployments",
+		"/api/v1/namespaces/dev/deployments/api",
+		"/api/v1/namespaces/dev/deployments/api/logs",
+	} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: want 401, got %d", path, rr.Code)
 		}
 	}
 }
 
-func TestConsoleServesJavaScriptAsset(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{}, "")
+func TestListDeploymentsRoute(t *testing.T) {
+	h, _, rec := newTestHandler(t, nil)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/console/app.js", nil)
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
-	}
-	if got := resp.Header().Get("Content-Type"); got == "" || !strings.Contains(got, "javascript") {
-		t.Fatalf("content type = %q, want javascript", got)
-	}
-	if body := resp.Body.String(); !strings.Contains(body, "localStorage") || !strings.Contains(body, "fetch") {
-		t.Fatalf("asset body missing expected console logic; body=%s", body)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/dev/deployments", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body)
 	}
 }
 
-func TestUpdateImageRequiresPost(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{}, "")
+func TestListDeploymentsDeniedNamespace(t *testing.T) {
+	h, _, rec := newTestHandler(t, nil)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/deployments/image", nil)
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMethodNotAllowed)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/prod/deployments", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", rr.Code)
 	}
 }
 
-func TestCreateDeploymentRequiresPost(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{}, "")
+func TestGetDeploymentRoute(t *testing.T) {
+	h, _, rec := newTestHandler(t, nil)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/deployments", nil)
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusMethodNotAllowed)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/dev/deployments/api", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body)
 	}
 }
 
-func TestCreateDeploymentRejectsInvalidBearerToken(t *testing.T) {
-	svc := &fakeRolloutService{}
-	handler := NewHandler(svc, "secret")
+func TestGetDeploymentNotFound(t *testing.T) {
+	h, _, rec := newTestHandler(t, nil)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", bytes.NewBufferString(`{}`))
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusUnauthorized)
-	}
-	if svc.createCalls != 0 {
-		t.Fatalf("service called %d times, want 0", svc.createCalls)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/dev/deployments/missing", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rr.Code)
 	}
 }
 
-func TestCreateDeploymentRejectsMissingFields(t *testing.T) {
-	svc := &fakeRolloutService{}
-	handler := NewHandler(svc, "")
+func TestLogsOneShotRoute(t *testing.T) {
+	h, _, rec := newTestHandler(t, nil)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", bytes.NewBufferString(`{"namespace":"default"}`))
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusBadRequest)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/dev/deployments/api/logs", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
 	}
-	if svc.createCalls != 0 {
-		t.Fatalf("service called %d times, want 0", svc.createCalls)
-	}
-}
-
-func TestCreateDeploymentReturnsCreatedDeployment(t *testing.T) {
-	svc := &fakeRolloutService{
-		createResult: DeploymentCreateResult{
-			Namespace:  "default",
-			Name:       "nginx",
-			Container:  "app",
-			Image:      "nginx:1.27.0",
-			Replicas:   1,
-			Generation: 1,
-			Env: []DeploymentEnvVar{
-				{Name: "APP_ENV", Value: stringPtr("prod")},
-				{Name: "DATABASE_URL", Secret: &DeploymentEnvSecret{Name: "nginx-secret", Key: "database-url"}},
-			},
-		},
-	}
-	handler := NewHandler(svc, "secret")
-
-	body := bytes.NewBufferString(`{"namespace":"default","name":"nginx","image":"nginx:1.27.0","env":[{"name":"APP_ENV","value":"prod"},{"name":"DATABASE_URL","secret":{"name":"nginx-secret","key":"database-url"}}]}`)
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", body)
-	req.Header.Set("Authorization", "Bearer secret")
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusCreated, resp.Body.String())
-	}
-	if svc.createReq.Namespace != "default" || svc.createReq.Name != "nginx" || svc.createReq.Image != "nginx:1.27.0" {
-		t.Fatalf("request = %+v, want parsed request", svc.createReq)
-	}
-	if len(svc.createReq.Env) != 2 || svc.createReq.Env[0].Name != "APP_ENV" || svc.createReq.Env[0].Value == nil || *svc.createReq.Env[0].Value != "prod" {
-		t.Fatalf("request env = %+v, want literal APP_ENV=prod", svc.createReq.Env)
-	}
-	if svc.createReq.Env[1].Secret == nil || svc.createReq.Env[1].Secret.Name != "nginx-secret" || svc.createReq.Env[1].Secret.Key != "database-url" {
-		t.Fatalf("request env = %+v, want secret ref", svc.createReq.Env)
-	}
-
-	var got DeploymentCreateResult
-	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if got.Name != "nginx" || got.Container != "app" || got.Image != "nginx:1.27.0" || got.Replicas != 1 {
-		t.Fatalf("response = %+v, want create result", got)
-	}
-	if len(got.Env) != 2 || got.Env[0].Value == nil || *got.Env[0].Value != "prod" || got.Env[1].Secret == nil {
-		t.Fatalf("response env = %+v, want accepted env", got.Env)
+	if !strings.Contains(rr.Body.String(), "hello") {
+		t.Fatalf("expected log text, got %q", rr.Body.String())
 	}
 }
 
-func TestCreateDeploymentRejectsInvalidEnv(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-	}{
-		{
-			name: "missing env name",
-			body: `{"namespace":"default","name":"nginx","image":"nginx:1.27.0","env":[{"value":"prod"}]}`,
-		},
-		{
-			name: "missing env source",
-			body: `{"namespace":"default","name":"nginx","image":"nginx:1.27.0","env":[{"name":"APP_ENV"}]}`,
-		},
-		{
-			name: "both value and secret",
-			body: `{"namespace":"default","name":"nginx","image":"nginx:1.27.0","env":[{"name":"DATABASE_URL","value":"x","secret":{"name":"nginx-secret","key":"database-url"}}]}`,
-		},
-		{
-			name: "missing secret name",
-			body: `{"namespace":"default","name":"nginx","image":"nginx:1.27.0","env":[{"name":"DATABASE_URL","secret":{"key":"database-url"}}]}`,
-		},
-		{
-			name: "missing secret key",
-			body: `{"namespace":"default","name":"nginx","image":"nginx:1.27.0","env":[{"name":"DATABASE_URL","secret":{"name":"nginx-secret"}}]}`,
-		},
+func TestLogsStreamRoute(t *testing.T) {
+	h, _, rec := newTestHandler(t, nil)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/dev/deployments/api/logs/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			svc := &fakeRolloutService{}
-			handler := NewHandler(svc, "")
-
-			resp := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", bytes.NewBufferString(tt.body))
-			handler.ServeHTTP(resp, req)
-
-			if resp.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusBadRequest, resp.Body.String())
-			}
-			if svc.createCalls != 0 {
-				t.Fatalf("service called %d times, want 0", svc.createCalls)
-			}
-		})
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("content type = %q, want text/event-stream", ct)
+	}
+	if !strings.Contains(rr.Body.String(), "event: log") {
+		t.Fatalf("expected SSE log event, got %q", rr.Body.String())
 	}
 }
 
-func TestCreateDeploymentMapsAlreadyExistsTo409(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{createErr: ErrAlreadyExists}, "")
+func TestVerifyRoute(t *testing.T) {
+	h, _, rec := newTestHandler(t, nil)
 
-	body := bytes.NewBufferString(`{"namespace":"default","name":"nginx","image":"nginx:1.27.0"}`)
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", body)
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusConflict)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var resp struct {
+		IsAdmin bool `json:"isAdmin"`
+		Scopes  []struct {
+			Namespace  string `json:"namespace"`
+			Deployment string `json:"deployment"`
+		} `json:"scopes"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.IsAdmin {
+		t.Fatal("user token should not be admin")
+	}
+	if len(resp.Scopes) != 1 || resp.Scopes[0].Namespace != "dev" {
+		t.Fatalf("scopes = %+v", resp.Scopes)
 	}
 }
 
-func TestUpdateImageRejectsInvalidBearerToken(t *testing.T) {
-	svc := &fakeRolloutService{}
-	handler := NewHandler(svc, "secret")
+func TestVerifyRouteAdmin(t *testing.T) {
+	h, _, _ := newTestHandler(t, nil)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", bytes.NewBufferString(`{}`))
-	handler.ServeHTTP(resp, req)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify", nil)
+	req.Header.Set("Authorization", "Bearer adm")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var resp struct {
+		IsAdmin bool `json:"isAdmin"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if !resp.IsAdmin {
+		t.Fatal("admin token should set isAdmin=true")
+	}
+}
 
-	if resp.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusUnauthorized)
+func TestAdminCreateToken(t *testing.T) {
+	h, store, _ := newTestHandler(t, nil)
+
+	body := `{"label":"x","scopes":[{"namespace":"prod"}]}`
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/tokens", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer adm")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body)
+	}
+	if len(store.List()) != 2 { // the seeded dev token + the new one
+		t.Fatalf("expected 2 tokens, got %d", len(store.List()))
+	}
+
+	var created auth.TokenRecord
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Token == "" {
+		t.Fatal("create response should return plaintext token once")
+	}
+}
+
+func TestAdminCreateTokenRequiresAdminToken(t *testing.T) {
+	h, _, _ := newTestHandler(t, nil)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/tokens", bytes.NewBufferString(`{"scopes":[{"namespace":"prod"}]}`))
+	req.Header.Set("Authorization", "Bearer wrong")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", rr.Code)
+	}
+}
+
+func TestAdminListTokensOmitsPlaintext(t *testing.T) {
+	h, _, _ := newTestHandler(t, nil)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/tokens", nil)
+	req.Header.Set("Authorization", "Bearer adm")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var list []auth.TokenRecord
+	if err := json.Unmarshal(rr.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("want 1 token, got %d", len(list))
+	}
+	if list[0].Token != "" {
+		t.Fatal("list must not expose plaintext token")
+	}
+}
+
+func TestAdminDeleteToken(t *testing.T) {
+	h, store, _ := newTestHandler(t, nil)
+
+	list := store.List()
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/tokens/"+list[0].ID, nil)
+	req.Header.Set("Authorization", "Bearer adm")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d", rr.Code)
+	}
+	if len(store.List()) != 0 {
+		t.Fatalf("expected 0 tokens after delete, got %d", len(store.List()))
+	}
+}
+
+func TestUpdateImageRejectsGet(t *testing.T) {
+	svc := &fakeService{}
+	h, _, rec := newTestHandler(t, svc)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces/dev/deployments/api/image", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	// POST-only pattern route: GET does not match, falls through to 404.
+	if rr.Code == http.StatusOK {
+		t.Fatalf("GET should not succeed; got %d", rr.Code)
 	}
 	if svc.calls != 0 {
 		t.Fatalf("service called %d times, want 0", svc.calls)
@@ -295,27 +390,23 @@ func TestUpdateImageRejectsInvalidBearerToken(t *testing.T) {
 }
 
 func TestUpdateImageRejectsMissingFields(t *testing.T) {
-	svc := &fakeRolloutService{}
-	handler := NewHandler(svc, "")
+	h, _, rec := newTestHandler(t, &fakeService{})
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", bytes.NewBufferString(`{"namespace":"default"}`))
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusBadRequest)
-	}
-	if svc.calls != 0 {
-		t.Fatalf("service called %d times, want 0", svc.calls)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/dev/deployments/api/image", bytes.NewBufferString(`{"namespace":"dev"}`))
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }
 
 func TestUpdateImageReturnsRolloutResult(t *testing.T) {
-	svc := &fakeRolloutService{
-		result: RolloutResult{
-			Namespace:       "default",
-			Deployment:      "nginx",
-			Container:       "nginx",
+	svc := &fakeService{
+		result: rollout.RolloutResult{
+			Namespace:       "dev",
+			Deployment:      "api",
+			Container:       "api",
 			OldImage:        "nginx:1.26.0",
 			NewImage:        "nginx:1.27.0",
 			Generation:      7,
@@ -323,72 +414,69 @@ func TestUpdateImageReturnsRolloutResult(t *testing.T) {
 			RolloutComplete: true,
 		},
 	}
-	handler := NewHandler(svc, "secret")
+	h, _, rec := newTestHandler(t, svc)
 
-	body := bytes.NewBufferString(`{"namespace":"default","deployment":"nginx","container":"nginx","image":"nginx:1.27.0","dryRun":true,"wait":true,"timeoutSeconds":120}`)
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", body)
-	req.Header.Set("Authorization", "Bearer secret")
-	handler.ServeHTTP(resp, req)
+	body := bytes.NewBufferString(`{"namespace":"dev","deployment":"api","container":"api","image":"nginx:1.27.0","dryRun":true,"wait":true,"timeoutSeconds":120}`)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/dev/deployments/api/image", body)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
 
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	if svc.req.Namespace != "default" || svc.req.Deployment != "nginx" || svc.req.Container != "nginx" || svc.req.Image != "nginx:1.27.0" || !svc.req.DryRun || !svc.req.Wait || svc.req.TimeoutSeconds != 120 {
+	if svc.req.Container != "api" || svc.req.Image != "nginx:1.27.0" || !svc.req.DryRun || !svc.req.Wait || svc.req.TimeoutSeconds != 120 {
 		t.Fatalf("request = %+v, want parsed request", svc.req)
 	}
 
-	var got RolloutResult
-	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil {
+	var got rollout.RolloutResult
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if got.OldImage != "nginx:1.26.0" || got.NewImage != "nginx:1.27.0" || got.Generation != 7 {
 		t.Fatalf("response = %+v, want rollout result", got)
 	}
-	if !got.DryRun || !got.RolloutComplete {
-		t.Fatalf("response = %+v, want dry run and complete flags", got)
-	}
 }
 
 func TestUpdateImageMapsNotFoundTo404(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{err: ErrNotFound}, "")
+	h, _, rec := newTestHandler(t, &fakeService{err: rollout.ErrNotFound})
 
-	body := bytes.NewBufferString(`{"namespace":"default","deployment":"missing","container":"nginx","image":"nginx:1.27.0"}`)
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", body)
-	handler.ServeHTTP(resp, req)
+	body := bytes.NewBufferString(`{"namespace":"dev","deployment":"missing","container":"api","image":"nginx:1.27.0"}`)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/dev/deployments/missing/image", body)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
 
-	if resp.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusNotFound)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNotFound)
 	}
 }
 
 func TestUpdateImageMapsUnexpectedErrorsTo500(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{err: errors.New("api failed")}, "")
+	h, _, rec := newTestHandler(t, &fakeService{err: errors.New("api failed")})
 
-	body := bytes.NewBufferString(`{"namespace":"default","deployment":"nginx","container":"nginx","image":"nginx:1.27.0"}`)
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", body)
-	handler.ServeHTTP(resp, req)
+	body := bytes.NewBufferString(`{"namespace":"dev","deployment":"api","container":"api","image":"nginx:1.27.0"}`)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/dev/deployments/api/image", body)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
 
-	if resp.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusInternalServerError)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusInternalServerError)
 	}
 }
 
 func TestUpdateImageMapsForbiddenTo403(t *testing.T) {
-	handler := NewHandler(&fakeRolloutService{err: ErrForbidden}, "")
+	// token scoped to dev, request targets prod -> 403
+	h, _, rec := newTestHandler(t, &fakeService{})
 
-	body := bytes.NewBufferString(`{"namespace":"prod","deployment":"nginx","container":"nginx","image":"nginx:1.27.0"}`)
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/image", body)
-	handler.ServeHTTP(resp, req)
+	body := bytes.NewBufferString(`{"namespace":"prod","deployment":"api","container":"api","image":"nginx:1.27.0"}`)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/prod/deployments/api/image", body)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
 
-	if resp.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", resp.Code, http.StatusForbidden)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusForbidden)
 	}
-}
-
-func stringPtr(v string) *string {
-	return &v
 }

@@ -11,140 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+
+	"letorollout/internal/rollout"
 )
-
-func TestCreateDeploymentCreatesMinimalDeployment(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	updater := NewDeploymentImageUpdater(client)
-
-	result, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
-		Namespace: "default",
-		Name:      "nginx",
-		Image:     "nginx:1.27.0",
-	})
-	if err != nil {
-		t.Fatalf("CreateDeployment returned error: %v", err)
-	}
-
-	created, err := client.AppsV1().Deployments("default").Get(context.Background(), "nginx", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get created deployment: %v", err)
-	}
-	if created.Spec.Replicas == nil || *created.Spec.Replicas != 1 {
-		t.Fatalf("replicas = %v, want 1", created.Spec.Replicas)
-	}
-	if got := created.Spec.Template.Spec.Containers[0]; got.Name != "app" || got.Image != "nginx:1.27.0" {
-		t.Fatalf("container = %+v, want app with nginx:1.27.0", got)
-	}
-	for key, value := range created.Spec.Selector.MatchLabels {
-		if created.Spec.Template.Labels[key] != value {
-			t.Fatalf("template label %s = %q, want selector value %q", key, created.Spec.Template.Labels[key], value)
-		}
-	}
-	if result.Namespace != "default" || result.Name != "nginx" || result.Container != "app" || result.Image != "nginx:1.27.0" || result.Replicas != 1 {
-		t.Fatalf("result = %+v, want created deployment details", result)
-	}
-}
-
-func TestCreateDeploymentAddsLiteralAndSecretEnv(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	updater := NewDeploymentImageUpdater(client)
-
-	result, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
-		Namespace: "default",
-		Name:      "nginx",
-		Image:     "nginx:1.27.0",
-		Env: []DeploymentEnvVar{
-			{Name: "APP_ENV", Value: stringPtr("prod")},
-			{Name: "DATABASE_URL", Secret: &DeploymentEnvSecret{Name: "nginx-secret", Key: "database-url"}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateDeployment returned error: %v", err)
-	}
-
-	created, err := client.AppsV1().Deployments("default").Get(context.Background(), "nginx", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get created deployment: %v", err)
-	}
-
-	env := created.Spec.Template.Spec.Containers[0].Env
-	if len(env) != 2 {
-		t.Fatalf("env length = %d, want 2: %+v", len(env), env)
-	}
-	if env[0].Name != "APP_ENV" || env[0].Value != "prod" || env[0].ValueFrom != nil {
-		t.Fatalf("env[0] = %+v, want literal APP_ENV=prod", env[0])
-	}
-	if env[1].Name != "DATABASE_URL" || env[1].ValueFrom == nil || env[1].ValueFrom.SecretKeyRef == nil {
-		t.Fatalf("env[1] = %+v, want SecretKeyRef", env[1])
-	}
-	if env[1].ValueFrom.SecretKeyRef.Name != "nginx-secret" || env[1].ValueFrom.SecretKeyRef.Key != "database-url" {
-		t.Fatalf("secret ref = %+v, want nginx-secret/database-url", env[1].ValueFrom.SecretKeyRef)
-	}
-	if len(result.Env) != 2 || result.Env[0].Name != "APP_ENV" || result.Env[1].Secret == nil || result.Env[1].Secret.Name != "nginx-secret" {
-		t.Fatalf("result env = %+v, want accepted env", result.Env)
-	}
-}
-
-func TestCreateDeploymentRejectsDisallowedNamespace(t *testing.T) {
-	updater := NewDeploymentImageUpdater(fake.NewSimpleClientset(), UpdaterOptions{
-		AllowedNamespaces: []string{"dev"},
-	})
-
-	_, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
-		Namespace: "prod",
-		Name:      "nginx",
-		Image:     "nginx:1.27.0",
-	})
-
-	if !errors.Is(err, ErrForbidden) {
-		t.Fatalf("err = %v, want ErrForbidden", err)
-	}
-}
-
-func TestCreateDeploymentAddsRequiredDeploymentLabel(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	updater := NewDeploymentImageUpdater(client, UpdaterOptions{
-		RequiredDeploymentLabel: "letorollout/enabled=true",
-	})
-
-	_, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
-		Namespace: "default",
-		Name:      "nginx",
-		Image:     "nginx:1.27.0",
-	})
-	if err != nil {
-		t.Fatalf("CreateDeployment returned error: %v", err)
-	}
-
-	created, err := client.AppsV1().Deployments("default").Get(context.Background(), "nginx", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get created deployment: %v", err)
-	}
-	if created.Labels["letorollout/enabled"] != "true" {
-		t.Fatalf("label = %q, want true", created.Labels["letorollout/enabled"])
-	}
-	if created.Spec.Template.Labels["letorollout/enabled"] != "true" {
-		t.Fatalf("template label = %q, want true", created.Spec.Template.Labels["letorollout/enabled"])
-	}
-}
-
-func TestCreateDeploymentReturnsAlreadyExists(t *testing.T) {
-	deployment := deploymentFixture("default", "nginx", []corev1.Container{
-		{Name: "nginx", Image: "nginx:1.26.0"},
-	})
-	updater := NewDeploymentImageUpdater(fake.NewSimpleClientset(deployment))
-
-	_, err := updater.CreateDeployment(context.Background(), DeploymentCreateRequest{
-		Namespace: "default",
-		Name:      "nginx",
-		Image:     "nginx:1.27.0",
-	})
-
-	if !errors.Is(err, ErrAlreadyExists) {
-		t.Fatalf("err = %v, want ErrAlreadyExists", err)
-	}
-}
 
 func TestUpdateImagePatchesDeploymentContainerImage(t *testing.T) {
 	deployment := deploymentFixture("default", "nginx", []corev1.Container{
@@ -326,3 +195,110 @@ func int32Ptr(v int32) *int32 {
 func stringPtr(v string) *string {
 	return &v
 }
+
+func deploymentWithStatus(namespace, name string, replicas, ready int32, containers []corev1.Container) *appsv1.Deployment {
+	d := deploymentFixture(namespace, name, containers).(*appsv1.Deployment)
+	d.Spec.Replicas = int32Ptr(replicas)
+	d.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}
+	d.Status = appsv1.DeploymentStatus{Replicas: replicas, ReadyReplicas: ready}
+	return d
+}
+
+func TestListDeployments(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		deploymentWithStatus("default", "api", 2, 2, []corev1.Container{{Name: "api", Image: "nginx:1.27"}}),
+		deploymentWithStatus("default", "web", 3, 1, []corev1.Container{{Name: "web", Image: "redis:7"}}),
+		deploymentWithStatus("prod", "api", 1, 1, []corev1.Container{{Name: "api", Image: "nginx:1.27"}}),
+	)
+	u := NewDeploymentImageUpdater(client)
+
+	got, err := u.ListDeployments(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 deployments, got %d: %+v", len(got), got)
+	}
+	// first container image + readyReplicas populated
+	var apiSummary *rollout.DeploymentSummary
+	for i := range got {
+		if got[i].Name == "api" {
+			apiSummary = &got[i]
+		}
+	}
+	if apiSummary == nil {
+		t.Fatalf("api not in list: %+v", got)
+	}
+	if apiSummary.ReadyReplicas != 2 || len(apiSummary.Containers) != 1 || apiSummary.Containers[0].Image != "nginx:1.27" {
+		t.Fatalf("api summary = %+v", apiSummary)
+	}
+}
+
+func TestGetDeployment(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		deploymentWithStatus("default", "api", 2, 2, []corev1.Container{{Name: "api", Image: "nginx:1.27"}}),
+	)
+	u := NewDeploymentImageUpdater(client)
+
+	got, err := u.GetDeployment(context.Background(), "default", "api")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got.Name != "api" || len(got.Containers) != 1 || got.Containers[0].Name != "api" {
+		t.Fatalf("got %+v", got)
+	}
+	if got.Selector == "" {
+		t.Fatalf("expected non-empty selector")
+	}
+}
+
+func TestGetDeploymentNotFound(t *testing.T) {
+	u := NewDeploymentImageUpdater(fake.NewSimpleClientset())
+
+	_, err := u.GetDeployment(context.Background(), "default", "missing")
+	if !errors.Is(err, rollout.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStreamLogsOpensAndClosesForKnownDeployment(t *testing.T) {
+	dep := deploymentFixture("default", "api", []corev1.Container{{Name: "api", Image: "nginx:1.27"}}).(*appsv1.Deployment)
+	dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}
+	dep.Spec.Template.Labels = map[string]string{"app": "api"}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-abc", Namespace: "default", Labels: map[string]string{"app": "api"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}},
+	}
+	client := fake.NewSimpleClientset(dep, pod)
+	u := NewDeploymentImageUpdater(client)
+
+	ch, err := u.StreamLogs(context.Background(), rollout.LogRequest{Namespace: "default", Deployment: "api", TailLines: 10})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	// fake clientset returns no log bytes; assert the stream opens and closes cleanly.
+	for range ch {
+	}
+}
+
+func TestStreamLogsMissingDeployment(t *testing.T) {
+	u := NewDeploymentImageUpdater(fake.NewSimpleClientset())
+
+	_, err := u.StreamLogs(context.Background(), rollout.LogRequest{Namespace: "default", Deployment: "missing"})
+	if !errors.Is(err, rollout.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStreamLogsDeploymentWithoutPods(t *testing.T) {
+	dep := deploymentFixture("default", "api", []corev1.Container{{Name: "api"}}).(*appsv1.Deployment)
+	dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}
+	client := fake.NewSimpleClientset(dep) // no Pods
+	u := NewDeploymentImageUpdater(client)
+
+	_, err := u.StreamLogs(context.Background(), rollout.LogRequest{Namespace: "default", Deployment: "api"})
+	if !errors.Is(err, rollout.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (no pods)", err)
+	}
+}
+
