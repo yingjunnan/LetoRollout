@@ -18,8 +18,8 @@ spec:
       serviceAccountName: letorollout
       containers:
         - name: letorollout
-          image: letorollout:latest
-          imagePullPolicy: IfNotPresent
+          image: yingjunnan/letorollout:latest
+          imagePullPolicy: Always
           env:
             - name: ADDR
               value: ":8080"
