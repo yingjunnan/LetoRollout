@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ type Service interface {
 	rollout.ImageUpdater
 	rollout.DeploymentReader
 	rollout.LogStreamer
+	rollout.NamespaceLister
 }
 
 // Config holds the per-handler configuration wired in main.
@@ -65,6 +67,7 @@ func NewHandlerWithAuditWriter(cfg Config, service Service, store *auth.TokenSto
 	mux.Handle("GET /api/v1/namespaces/{ns}/deployments/{name}/logs/stream", userMw(handleLogsStream(service, cfg.LogTailLines)))
 
 	// admin
+	mux.Handle("GET /api/v1/namespaces", adminMw(handleListNamespaces(service)))
 	mux.Handle("GET /api/v1/admin/tokens", adminMw(handleAdminListTokens(store)))
 	mux.Handle("POST /api/v1/admin/tokens", adminMw(handleAdminCreateToken(store)))
 	mux.Handle("DELETE /api/v1/admin/tokens/{id}", adminMw(handleAdminDeleteToken(store)))
@@ -136,6 +139,21 @@ func (s *PreviewService) ListDeployments(ctx context.Context, namespace string) 
 			out = append(out, d)
 		}
 	}
+	return out, nil
+}
+
+// ListNamespaces returns the distinct namespaces of seeded deployments,
+// sorted. This keeps the LOCAL_PREVIEW console usable for the admin picker.
+func (s *PreviewService) ListNamespaces(ctx context.Context) ([]string, error) {
+	seen := make(map[string]struct{})
+	for _, d := range s.deployments {
+		seen[d.Namespace] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for ns := range seen {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
 	return out, nil
 }
 
@@ -284,6 +302,17 @@ func handleListDeployments(service Service) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, deps)
+	}
+}
+
+func handleListNamespaces(service Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		namespaces, err := service.ListNamespaces(r.Context())
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"namespaces": namespaces})
 	}
 }
 

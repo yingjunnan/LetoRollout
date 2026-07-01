@@ -146,6 +146,28 @@ func (u *DeploymentImageUpdater) ListDeployments(ctx context.Context, namespace 
 	return out, nil
 }
 
+// ListNamespaces returns the active namespaces the image-updater is allowed
+// to touch, sorted. It applies the same ALLOWED_NAMESPACES allowlist used for
+// mutations, so the admin picker only offers namespaces that scope is meaningful.
+func (u *DeploymentImageUpdater) ListNamespaces(ctx context.Context) ([]string, error) {
+	list, err := u.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list namespaces: %w", err)
+	}
+	out := make([]string, 0, len(list.Items))
+	for _, ns := range list.Items {
+		if ns.Status.Phase == corev1.NamespaceTerminating {
+			continue
+		}
+		if !u.namespaceAllowed(ns.Name) {
+			continue
+		}
+		out = append(out, ns.Name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (u *DeploymentImageUpdater) GetDeployment(ctx context.Context, namespace, name string) (rollout.DeploymentDetail, error) {
 	d, err := u.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../../api/client";
+import { api, ApiError } from "../../api/client";
 import type { TokenRecord, TokenScope } from "../../api/types";
 import { useSession, useToasts } from "../../state/store";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { ExpiryPicker, type ExpiryValue } from "./ExpiryPicker";
 
 export function AdminPanel({ onExit }: { onExit: () => void }) {
   const token = useSession((s) => s.token)!;
@@ -11,11 +13,15 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
   const [tokens, setTokens] = useState<TokenRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // namespace picker state
+  const [namespaces, setNamespaces] = useState<string[]>([]);
+  const [nsLoading, setNsLoading] = useState(true);
+
   // create-form state
   const [label, setLabel] = useState("");
   const [ns, setNs] = useState("");
   const [dep, setDep] = useState("");
-  const [expires, setExpires] = useState("");
+  const [expires, setExpires] = useState<ExpiryValue>(null);
   const [creating, setCreating] = useState(false);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
 
@@ -24,15 +30,33 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
     try {
       setTokens(await api.adminListTokens(token));
     } catch (err) {
-      push("error", `List failed: ${(err as Error).message}`);
+      if (err instanceof ApiError && err.status === 401) {
+        push("error", "Session expired");
+      } else {
+        push("error", `List failed: ${(err as Error).message}`);
+      }
     } finally {
       setLoading(false);
     }
   }, [token, push]);
 
+  const refreshNamespaces = useCallback(async () => {
+    setNsLoading(true);
+    try {
+      const list = await api.adminListNamespaces(token);
+      setNamespaces(list);
+      if (!ns && list.length > 0) setNs(list.includes("default") ? "default" : list[0]);
+    } catch (err) {
+      push("error", `Failed to load namespaces: ${(err as Error).message}`);
+    } finally {
+      setNsLoading(false);
+    }
+  }, [token, push, ns]);
+
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    refreshNamespaces();
+  }, [refresh, refreshNamespaces]);
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,14 +71,13 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
       const rec = await api.adminCreateToken(token, {
         label,
         scopes,
-        expiresAt: expires || null,
+        expiresAt: expires,
       });
       setCreatedToken(rec.token ?? null);
       push("success", "Token created");
       setLabel("");
-      setNs("");
       setDep("");
-      setExpires("");
+      setExpires(null);
       refresh();
     } catch (err) {
       push("error", `Create failed: ${(err as Error).message}`);
@@ -75,103 +98,149 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-base font-semibold text-text">Token management</h2>
-        <Button variant="secondary" onClick={onExit} className="!text-xs">
-          Back to console
+    <div className="relative z-10 flex-1 overflow-y-auto p-6">
+      <div className="mb-5 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="font-mono text-sm font-semibold tracking-tight text-text">
+            token_management
+          </h2>
+          <span className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-muted">
+            admin
+          </span>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onExit}>
+          ← Back to console
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-6 max-w-4xl">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 max-w-5xl">
         {/* create */}
         <form
           onSubmit={create}
-          className="bg-panel border border-border rounded-md p-4 flex flex-col gap-3"
+          className="card animate-fade-up flex flex-col gap-4 p-5"
         >
-          <span className="text-sm font-medium text-text">Create token</span>
+          <span className="font-mono text-xs font-medium uppercase tracking-wider text-primary">
+            + create token
+          </span>
+
           <Input
             label="Label"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="alice-prod"
           />
-          <Input
+
+          <Select
             label="Namespace"
             value={ns}
             onChange={(e) => setNs(e.target.value)}
-            placeholder="default"
-          />
+            disabled={nsLoading}
+          >
+            {nsLoading && <option value="">Loading namespaces…</option>}
+            {!nsLoading && namespaces.length === 0 && (
+              <option value="">No namespaces available</option>
+            )}
+            {namespaces.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </Select>
+
           <Input
             label="Deployment (optional — empty = whole namespace)"
             value={dep}
             onChange={(e) => setDep(e.target.value)}
             placeholder="api"
           />
-          <Input
-            label="Expires at (optional, RFC3339)"
-            value={expires}
-            onChange={(e) => setExpires(e.target.value)}
-            placeholder="2026-12-31T00:00:00Z"
-          />
-          <Button type="submit" variant="primary" loading={creating}>
-            Create
-          </Button>
+
+          <ExpiryPicker value={expires} onChange={setExpires} />
+
+          <div className="pt-1">
+            <Button type="submit" variant="primary" loading={creating} className="w-full">
+              Generate token
+            </Button>
+          </div>
+
           {createdToken && (
-            <div className="bg-bg border border-border rounded-md p-2 text-xs font-mono break-all text-success">
-              {createdToken}
-              <div className="text-muted mt-1">
-                (shown once — copy now)
+            <div className="animate-fade-up rounded-md border border-success/40 bg-success/10 p-3">
+              <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-success">
+                <span className="h-1.5 w-1.5 rounded-full bg-success" />
+                token (shown once)
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="block flex-1 break-all font-mono text-xs text-text">
+                  {createdToken}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(createdToken);
+                    push("success", "Copied");
+                  }}
+                  className="shrink-0 rounded border border-border bg-surface px-2 py-1 font-mono text-[10px] text-subtext transition-colors hover:border-primary/50 hover:text-text"
+                >
+                  copy
+                </button>
               </div>
             </div>
           )}
         </form>
 
         {/* list */}
-        <div className="bg-panel border border-border rounded-md p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-text">
-              Existing tokens
+        <div className="card animate-fade-up p-5" style={{ animationDelay: "60ms" }}>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="font-mono text-xs font-medium uppercase tracking-wider text-subtext">
+              existing tokens
             </span>
             <button
               onClick={refresh}
               disabled={loading}
-              className="text-xs text-muted hover:text-text"
+              className="font-mono text-[10px] text-muted transition-colors hover:text-primary disabled:opacity-40"
             >
-              ↻
+              {loading ? "syncing…" : "↻ refresh"}
             </button>
           </div>
           <ul className="flex flex-col gap-2">
-            {tokens.length === 0 && (
-              <li className="text-xs text-muted">No tokens.</li>
+            {tokens.length === 0 && !loading && (
+              <li className="rounded-md border border-dashed border-border px-3 py-6 text-center font-mono text-xs text-muted">
+                no tokens yet
+              </li>
             )}
             {tokens.map((t) => (
               <li
                 key={t.id}
-                className="bg-bg border border-border rounded-md p-2 text-xs"
+                className="group rounded-md border border-border bg-surface px-3 py-2.5 transition-colors hover:border-borderHi"
               >
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-text">
-                    {t.label || "(no label)"}
+                    {t.label || (
+                      <span className="font-mono text-muted">(no label)</span>
+                    )}
                   </span>
                   <Button
                     variant="danger"
+                    size="sm"
                     onClick={() => remove(t.id)}
-                    className="!py-0.5 !px-2 !text-xs"
                   >
                     Delete
                   </Button>
                 </div>
-                <div className="text-muted mt-1">
-                  scopes:{" "}
-                  {t.scopes
-                    .map((s) =>
-                      s.deployment ? `${s.namespace}/${s.deployment}` : s.namespace
-                    )
-                    .join(", ")}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {t.scopes.map((s, i) => (
+                    <span
+                      key={i}
+                      className="rounded border border-border bg-panel px-1.5 py-0.5 font-mono text-[10px] text-subtext"
+                    >
+                      {s.deployment ? `${s.namespace}/${s.deployment}` : s.namespace}
+                    </span>
+                  ))}
                 </div>
-                <div className="text-muted">
-                  expires: {t.expiresAt ?? "never"}
+                <div className="mt-1.5 font-mono text-[10px] text-muted">
+                  expires:{" "}
+                  {t.expiresAt
+                    ? new Date(t.expiresAt).toLocaleString()
+                    : "never"}
                 </div>
               </li>
             ))}

@@ -85,3 +85,10 @@ type LogStreamer interface {
 	StreamLogs(ctx context.Context, req LogRequest) (<-chan LogLine, error)
 }
 
+// NamespaceLister lists the namespaces an admin may grant scopes over.
+// Implementations apply the service's own namespace allowlist (ALLOWED_NAMESPACES)
+// so the picker never offers namespaces the image-updater would reject.
+type NamespaceLister interface {
+	ListNamespaces(ctx context.Context) ([]string, error)
+}
+

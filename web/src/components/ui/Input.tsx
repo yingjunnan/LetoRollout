@@ -9,14 +9,21 @@ export function Input({ label, hint, id, className = "", ...rest }: InputProps) 
   return (
     <label className="block">
       {label && (
-        <span className="block text-xs text-muted mb-1">{label}</span>
+        <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted">
+          {label}
+        </span>
       )}
       <input
         id={id}
         {...rest}
-        className={`w-full bg-bg border border-border rounded-md px-3 py-1.5 text-sm text-text placeholder-muted focus:outline-none focus:border-primary ${className}`}
+        className={`w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-muted/70
+          transition-all duration-150
+          hover:border-borderHi
+          focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 ${className}`}
       />
-      {hint && <span className="block text-xs text-muted mt-1">{hint}</span>}
+      {hint && (
+        <span className="mt-1 block font-mono text-[10px] text-muted">{hint}</span>
+      )}
     </label>
   );
 }

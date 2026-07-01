@@ -136,6 +136,20 @@ export const api = {
   },
 
   // ---- admin ----
+  adminListNamespaces: async (token: string): Promise<string[]> => {
+    const res = await fetch("/api/v1/namespaces", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      const msg =
+        (parsed && (parsed as { error?: string }).error) || res.statusText;
+      throw new ApiError(res.status, msg);
+    }
+    return (parsed as { namespaces?: string[] }).namespaces ?? [];
+  },
+
   adminListTokens: (token: string) =>
     request<TokenRecord[]>("GET", "/api/v1/admin/tokens", token),
 
