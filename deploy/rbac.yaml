@@ -13,8 +13,8 @@ rules:
     resources: ["deployments"]
     verbs: ["get", "list", "patch", "create"]
   - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
