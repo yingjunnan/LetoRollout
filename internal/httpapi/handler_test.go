@@ -26,6 +26,7 @@ type fakeService struct {
 	logCalls      int
 	getDeployment rollout.DeploymentDetail
 	getErr        error
+	namespaces    []string
 }
 
 func (f *fakeService) UpdateImage(ctx context.Context, req rollout.ImageUpdateRequest) (rollout.RolloutResult, error) {
@@ -70,6 +71,10 @@ func (f *fakeService) StreamLogs(ctx context.Context, req rollout.LogRequest) (<
 		}
 	}()
 	return out, nil
+}
+
+func (f *fakeService) ListNamespaces(ctx context.Context) ([]string, error) {
+	return f.namespaces, nil
 }
 
 // newTestHandler builds a handler with a token scoped to namespace "dev" and
@@ -478,5 +483,65 @@ func TestUpdateImageMapsForbiddenTo403(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusForbidden)
+	}
+}
+
+func TestListNamespacesRequiresAdmin(t *testing.T) {
+	h, _, _ := newTestHandler(t, &fakeService{namespaces: []string{"default"}})
+
+	// no token -> 401
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces", nil)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("no-token status = %d, want 401", rr.Code)
+	}
+
+	// user token (non-admin) -> 401 (route is adminMw-gated)
+	h, _, rec := newTestHandler(t, &fakeService{namespaces: []string{"default"}})
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/namespaces", nil)
+	req.Header.Set("Authorization", "Bearer "+rec.Token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("user-token status = %d, want 401", rr.Code)
+	}
+}
+
+func TestListNamespacesAdmin(t *testing.T) {
+	h, _, _ := newTestHandler(t, &fakeService{namespaces: []string{"prod", "default"}})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/namespaces", nil)
+	req.Header.Set("Authorization", "Bearer adm")
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var got struct {
+		Namespaces []string `json:"namespaces"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Namespaces) != 2 || got.Namespaces[0] != "default" || got.Namespaces[1] != "prod" {
+		t.Fatalf("namespaces = %v, want [default prod]", got.Namespaces)
+	}
+}
+
+func TestPreviewServiceListNamespacesDistinct(t *testing.T) {
+	s := NewPreviewService()
+	s.SeedDeployment(rollout.DeploymentSummary{Name: "a", Namespace: "dev"})
+	s.SeedDeployment(rollout.DeploymentSummary{Name: "b", Namespace: "dev"})
+	s.SeedDeployment(rollout.DeploymentSummary{Name: "c", Namespace: "prod"})
+
+	got, err := s.ListNamespaces(context.Background())
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+	// distinct + sorted
+	if len(got) != 2 || got[0] != "dev" || got[1] != "prod" {
+		t.Fatalf("got = %v, want [dev prod]", got)
 	}
 }

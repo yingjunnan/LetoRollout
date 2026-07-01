@@ -4,6 +4,7 @@ import type { DeploymentSummary, RolloutResult } from "../../api/types";
 import { useSession, useToasts } from "../../state/store";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 
 export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary }) {
   const token = useSession((s) => s.token)!;
@@ -18,8 +19,6 @@ export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<RolloutResult | null>(null);
 
-  // When the selected deployment changes, default to its first container and
-  // seed the image field with the current image.
   useEffect(() => {
     const c = deployment.containers[0];
     setContainer(c?.name ?? "");
@@ -55,25 +54,22 @@ export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary 
   };
 
   return (
-    <form onSubmit={submit} className="max-w-md flex flex-col gap-4">
-      <div>
-        <span className="block text-xs text-muted mb-1">Container</span>
-        <select
-          value={container}
-          onChange={(e) => {
-            setContainer(e.target.value);
-            const c = deployment.containers.find((c) => c.name === e.target.value);
-            if (c) setImage(c.image);
-          }}
-          className="w-full bg-bg border border-border rounded-md px-3 py-1.5 text-sm text-text focus:outline-none focus:border-primary"
-        >
-          {deployment.containers.map((c) => (
-            <option key={c.name} value={c.name}>
-              {c.name} ({c.image})
-            </option>
-          ))}
-        </select>
-      </div>
+    <form onSubmit={submit} className="flex max-w-lg flex-col gap-4">
+      <Select
+        label="Container"
+        value={container}
+        onChange={(e) => {
+          setContainer(e.target.value);
+          const c = deployment.containers.find((c) => c.name === e.target.value);
+          if (c) setImage(c.image);
+        }}
+      >
+        {deployment.containers.map((c) => (
+          <option key={c.name} value={c.name}>
+            {c.name} ({c.image})
+          </option>
+        ))}
+      </Select>
 
       <Input
         label="Image"
@@ -82,23 +78,19 @@ export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary 
         placeholder="registry/image:tag"
       />
 
-      <div className="flex flex-col gap-2">
-        <label className="flex items-center gap-2 text-sm text-text">
-          <input
-            type="checkbox"
-            checked={dryRun}
-            onChange={(e) => setDryRun(e.target.checked)}
-          />
-          Dry run (preview without patching)
-        </label>
-        <label className="flex items-center gap-2 text-sm text-text">
-          <input
-            type="checkbox"
-            checked={wait}
-            onChange={(e) => setWait(e.target.checked)}
-          />
-          Wait for rollout
-        </label>
+      <div className="flex flex-col gap-2.5">
+        <ToggleRow
+          checked={dryRun}
+          onChange={setDryRun}
+          label="Dry run"
+          hint="preview without patching"
+        />
+        <ToggleRow
+          checked={wait}
+          onChange={setWait}
+          label="Wait for rollout"
+          hint="block until ready"
+        />
         {wait && (
           <Input
             label="Timeout (seconds)"
@@ -109,17 +101,59 @@ export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary 
         )}
       </div>
 
-      <div>
+      <div className="pt-1">
         <Button type="submit" variant="primary" loading={loading}>
           {dryRun ? "Preview" : "Update image"}
         </Button>
       </div>
 
       {result && (
-        <div className="bg-panel border border-border rounded-md p-3 text-xs font-mono whitespace-pre-wrap text-text">
-          {JSON.stringify(result, null, 2)}
+        <div className="animate-fade-up rounded-md border border-success/40 bg-success/5 p-3">
+          <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-success">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            result
+          </div>
+          <pre className="overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-text">
+            {JSON.stringify(result, null, 2)}
+          </pre>
         </div>
       )}
     </form>
+  );
+}
+
+function ToggleRow({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-borderHi">
+      <span className="flex items-baseline gap-2">
+        <span className="text-sm text-text">{label}</span>
+        <span className="font-mono text-[10px] text-muted">{hint}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors duration-200 ${
+          checked ? "bg-primary" : "bg-border"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 ${
+            checked ? "translate-x-4" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+    </label>
   );
 }

@@ -16,10 +16,7 @@ export function TokenGate() {
     try {
       const v = await api.verify(token.trim());
       setSession(token.trim(), v);
-      push(
-        "success",
-        v.isAdmin ? "Logged in as admin" : "Logged in"
-      );
+      push("success", v.isAdmin ? "Logged in as admin" : "Logged in");
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         push("error", "Invalid or expired token");
@@ -32,27 +29,54 @@ export function TokenGate() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg">
-      <div className="w-full max-w-sm bg-panel border border-border rounded-lg p-8">
-        <h1 className="text-lg font-semibold text-text mb-1">
-          LetoRollout Console
-        </h1>
-        <p className="text-xs text-muted mb-6">
-          Enter your access token to continue.
-        </p>
-        <form onSubmit={submit} className="flex flex-col gap-3">
+    <div className="relative z-10 flex min-h-screen items-center justify-center px-4">
+      <div className="w-full max-w-sm animate-fade-up">
+        {/* Mark */}
+        <div className="mb-7 flex items-center gap-3">
+          <div className="relative flex h-10 w-10 items-center justify-center rounded-lg border border-primary/30 bg-primaryDim shadow-glow">
+            <span className="font-mono text-base font-bold text-primary">L</span>
+            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 animate-pulse-ring rounded-full bg-primary" />
+          </div>
+          <div>
+            <h1 className="font-mono text-sm font-semibold tracking-tight text-text">
+              LetoRollout
+            </h1>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+              rollout console
+            </p>
+          </div>
+        </div>
+
+        <form
+          onSubmit={submit}
+          className="card flex flex-col gap-4 p-6"
+        >
+          <div>
+            <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted">
+              Access token
+            </span>
+            <p className="font-mono text-[11px] text-subtext">
+              Enter the bearer token issued to you.
+            </p>
+          </div>
           <input
             type="password"
             value={token}
             onChange={(e) => setToken(e.target.value)}
-            placeholder="token"
+            placeholder="letorollout-…"
             autoFocus
-            className="w-full bg-bg border border-border rounded-md px-3 py-2 text-sm text-text placeholder-muted focus:outline-none focus:border-primary"
+            className="w-full rounded-md border border-border bg-surface px-3 py-2.5 font-mono text-sm text-text
+              placeholder:text-muted/70 transition-all duration-150
+              hover:border-borderHi focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
           <Button type="submit" variant="primary" loading={loading} className="w-full">
-            Enter
+            Authenticate →
           </Button>
         </form>
+
+        <p className="mt-4 text-center font-mono text-[10px] text-muted">
+          scoped tokens · namespace-bound · expiring
+        </p>
       </div>
     </div>
   );
