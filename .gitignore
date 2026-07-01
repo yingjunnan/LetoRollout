@@ -11,6 +11,9 @@
 # local token store for preview dev
 /tokens.json
 
+# real admin-token Secret (use deploy/admin-secret.example.yaml as template)
+/deploy/admin-secret.yaml
+
 # node / vite
 /web/node_modules/
 /web/dist/
