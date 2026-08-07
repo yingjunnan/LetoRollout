@@ -1,11 +1,13 @@
-/* Distinctive technical type — JetBrains Mono for data, Inter Tight for UI.
+/* Distinctive technical type - JetBrains Mono for data, Inter Tight for UI.
    @import must precede @tailwind. */
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
 @import "@fontsource/jetbrains-mono/600.css";
+@import "@fontsource/jetbrains-mono/700.css";
 @import "@fontsource/inter-tight/400.css";
 @import "@fontsource/inter-tight/500.css";
 @import "@fontsource/inter-tight/600.css";
+@import "@fontsource/inter-tight/700.css";
 
 @tailwind base;
 @tailwind components;
@@ -17,14 +19,24 @@
 
 body {
   margin: 0;
-  background-color: #0a0e14;
-  color: #d6dde6;
+  /* Prevent the document itself from overscrolling / chaining, so internal
+     scroll areas (the log terminal) never drag the page. */
+  overscroll-behavior: none;
+  /* Page void with a single soft brand glow anchored to the top - the only
+     ambient flourish, kept faint so the grid texture reads as blueprint. */
+  background-color: #080b11;
+  background-image: radial-gradient(
+    ellipse 80% 50% at 50% -10%,
+    rgba(45, 212, 191, 0.05),
+    transparent 70%
+  );
+  color: #dce3ec;
   font-family: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* Atmospheric grid texture — faint technical blueprint feel.
+/* Atmospheric grid texture - faint control-room blueprint.
    Sits behind everything, fixed so it doesn't scroll. */
 body::before {
   content: "";
@@ -33,10 +45,14 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(45, 212, 191, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(45, 212, 191, 0.022) 1px, transparent 1px);
-  background-size: 40px 40px;
-  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 100%);
+    linear-gradient(rgba(56, 189, 248, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.022) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(
+    ellipse 90% 70% at 50% -10%,
+    #000 20%,
+    transparent 90%
+  );
 }
 
 /* Native form controls inherit the dark theme */
@@ -49,8 +65,8 @@ textarea {
 }
 
 select option {
-  background: #141b24;
-  color: #d6dde6;
+  background: #151c26;
+  color: #dce3ec;
 }
 
 /* Thin, refined scrollbars */
@@ -62,24 +78,38 @@ select option {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: #222b36;
+  background: #222c3a;
   border-radius: 4px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #2f3a47;
+  background: #2f3b4c;
   background-clip: padding-box;
 }
 
-/* Focus ring — confident teal, not browser default */
 :focus-visible {
   outline: none;
 }
 
 @layer components {
-  /* Reusable surface card */
+  /* Elevated surface card - the bento container */
   .card {
-    @apply bg-panel border border-border rounded-lg shadow-panel shadow-inset;
+    @apply rounded-xl border border-border bg-panel shadow-panel shadow-inset;
+  }
+  .card-hover {
+    @apply transition-colors duration-150 hover:border-borderHi;
+  }
+}
+
+/* Respect reduced motion: collapse CSS animations and transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

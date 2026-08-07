@@ -54,31 +54,33 @@ export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary 
   };
 
   return (
-    <form onSubmit={submit} className="flex max-w-lg flex-col gap-4">
-      <Select
-        label="Container"
-        value={container}
-        onChange={(e) => {
-          setContainer(e.target.value);
-          const c = deployment.containers.find((c) => c.name === e.target.value);
-          if (c) setImage(c.image);
-        }}
-      >
-        {deployment.containers.map((c) => (
-          <option key={c.name} value={c.name}>
-            {c.name} ({c.image})
-          </option>
-        ))}
-      </Select>
+    <form onSubmit={submit} className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Select
+          label="Container"
+          value={container}
+          onChange={(e) => {
+            setContainer(e.target.value);
+            const c = deployment.containers.find((c) => c.name === e.target.value);
+            if (c) setImage(c.image);
+          }}
+        >
+          {deployment.containers.map((c) => (
+            <option key={c.name} value={c.name}>
+              {c.name} ({c.image})
+            </option>
+          ))}
+        </Select>
 
-      <Input
-        label="Image"
-        value={image}
-        onChange={(e) => setImage(e.target.value)}
-        placeholder="registry/image:tag"
-      />
+        <Input
+          label="Image"
+          value={image}
+          onChange={(e) => setImage(e.target.value)}
+          placeholder="registry/image:tag"
+        />
+      </div>
 
-      <div className="flex flex-col gap-2.5">
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         <ToggleRow
           checked={dryRun}
           onChange={setDryRun}
@@ -91,15 +93,17 @@ export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary 
           label="Wait for rollout"
           hint="block until ready"
         />
-        {wait && (
-          <Input
-            label="Timeout (seconds)"
-            type="number"
-            value={timeout}
-            onChange={(e) => setTimeout_(e.target.value)}
-          />
-        )}
       </div>
+
+      {wait && (
+        <Input
+          label="Timeout (seconds)"
+          type="number"
+          value={timeout}
+          onChange={(e) => setTimeout_(e.target.value)}
+          className="w-40"
+        />
+      )}
 
       <div className="pt-1">
         <Button type="submit" variant="primary" loading={loading}>
@@ -108,7 +112,7 @@ export function ImageUpdateForm({ deployment }: { deployment: DeploymentSummary 
       </div>
 
       {result && (
-        <div className="animate-fade-up rounded-md border border-success/40 bg-success/5 p-3">
+        <div className="animate-fade-up rounded-lg border border-success/40 bg-success/5 p-3">
           <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-success">
             <span className="h-1.5 w-1.5 rounded-full bg-success" />
             result
@@ -134,7 +138,7 @@ function ToggleRow({
   hint: string;
 }) {
   return (
-    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 transition-colors hover:border-borderHi">
+    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border bg-surface px-3 py-2 transition-colors hover:border-borderHi">
       <span className="flex items-baseline gap-2">
         <span className="text-sm text-text">{label}</span>
         <span className="font-mono text-[10px] text-muted">{hint}</span>

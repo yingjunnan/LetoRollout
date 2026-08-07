@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import { api, ApiError } from "../../api/client";
 import type { TokenRecord, TokenScope } from "../../api/types";
 import { useSession, useToasts } from "../../state/store";
@@ -6,10 +7,12 @@ import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { ExpiryPicker, type ExpiryValue } from "./ExpiryPicker";
+import { cardVariants, staggerContainer } from "../../lib/motion";
 
 export function AdminPanel({ onExit }: { onExit: () => void }) {
   const token = useSession((s) => s.token)!;
   const push = useToasts((s) => s.push);
+  const reduce = useReducedMotion();
   const [tokens, setTokens] = useState<TokenRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -98,8 +101,8 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
   };
 
   return (
-    <div className="relative z-10 flex-1 overflow-y-auto p-6">
-      <div className="mb-5 flex items-center justify-between">
+    <div className="relative z-10 flex-1 overflow-y-auto p-4 lg:p-6">
+      <div className="mx-auto mb-5 flex max-w-5xl items-center justify-between">
         <div className="flex items-center gap-3">
           <h2 className="font-mono text-sm font-semibold tracking-tight text-text">
             token_management
@@ -113,11 +116,17 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 max-w-5xl">
+      <motion.div
+        variants={staggerContainer}
+        initial={reduce ? false : "hidden"}
+        animate="show"
+        className="mx-auto grid grid-cols-1 gap-5 lg:grid-cols-2 max-w-5xl"
+      >
         {/* create */}
-        <form
+        <motion.form
           onSubmit={create}
-          className="card animate-fade-up flex flex-col gap-4 p-5"
+          variants={cardVariants}
+          className="card flex flex-col gap-4 p-5"
         >
           <span className="font-mono text-xs font-medium uppercase tracking-wider text-primary">
             + create token
@@ -185,10 +194,10 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
               </div>
             </div>
           )}
-        </form>
+        </motion.form>
 
         {/* list */}
-        <div className="card animate-fade-up p-5" style={{ animationDelay: "60ms" }}>
+        <motion.div variants={cardVariants} className="card p-5">
           <div className="mb-3 flex items-center justify-between">
             <span className="font-mono text-xs font-medium uppercase tracking-wider text-subtext">
               existing tokens
@@ -245,8 +254,8 @@ export function AdminPanel({ onExit }: { onExit: () => void }) {
               </li>
             ))}
           </ul>
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
     </div>
   );
 }

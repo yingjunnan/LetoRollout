@@ -18,13 +18,11 @@ export function LogViewer({ deployment }: { deployment: DeploymentSummary }) {
   const [loading, setLoading] = useState(false);
   const [following, setFollowing] = useState(false);
   const esRef = useRef<EventSource | null>(null);
-
-  useEffect(() => {
-    setContainer(deployment.containers[0]?.name ?? "");
-    setLines([]);
-    stopFollow();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deployment]);
+  const preRef = useRef<HTMLPreElement | null>(null);
+  // Whether the view is pinned to the bottom. Cleared when the user scrolls up
+  // to inspect history so new lines don't yank them back down; re-armed when
+  // they scroll back to the bottom.
+  const stickRef = useRef(true);
 
   const stopFollow = () => {
     if (esRef.current) {
@@ -34,7 +32,31 @@ export function LogViewer({ deployment }: { deployment: DeploymentSummary }) {
     setFollowing(false);
   };
 
+  const startFollow = (c: string) => {
+    if (!c) return;
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+    setLines([]);
+    setFollowing(true);
+    stickRef.current = true;
+    const es = api.streamLogs(
+      token,
+      deployment.namespace,
+      deployment.name,
+      { container: c, tailLines: Number(tailLines) || undefined, previous },
+      (line) => setLines((prev) => [...prev, line]),
+      (err) => {
+        push("error", `Log stream: ${err}`);
+        stopFollow();
+      }
+    );
+    esRef.current = es;
+  };
+
   const fetchOnce = async () => {
+    stopFollow();
     setLoading(true);
     setLines([]);
     try {
@@ -62,26 +84,37 @@ export function LogViewer({ deployment }: { deployment: DeploymentSummary }) {
       stopFollow();
       return;
     }
-    setLines([]);
-    setFollowing(true);
-    const es = api.streamLogs(
-      token,
-      deployment.namespace,
-      deployment.name,
-      { container, tailLines: Number(tailLines) || undefined, previous },
-      (line) => setLines((prev) => [...prev, line]),
-      (err) => {
-        push("error", `Log stream: ${err}`);
-        stopFollow();
-      }
-    );
-    esRef.current = es;
+    startFollow(container);
   };
 
-  useEffect(() => () => stopFollow(), []);
+  const onScroll = () => {
+    const el = preRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  // On mount / deployment change: reset to the first container and auto-start
+  // following so logs stream as soon as a deployment is opened.
+  useEffect(() => {
+    const initialContainer = deployment.containers[0]?.name ?? "";
+    setContainer(initialContainer);
+    setLines([]);
+    stopFollow();
+    startFollow(initialContainer);
+    return () => stopFollow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deployment]);
+
+  // Keep the view pinned to the latest line while following, unless the user
+  // has scrolled up to read history.
+  useEffect(() => {
+    const el = preRef.current;
+    if (!el || !following || !stickRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [lines, following]);
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className="flex min-h-0 flex-col gap-3 lg:flex-1">
       <div className="flex flex-wrap items-end gap-3">
         <Select
           label="Container"
@@ -121,18 +154,23 @@ export function LogViewer({ deployment }: { deployment: DeploymentSummary }) {
         </div>
       </div>
 
-      <div className="relative flex-1 overflow-hidden rounded-md border border-border bg-surface min-h-64">
+      {/* The terminal scrolls internally - on large screens it fills the
+          remaining viewport height, so accumulating lines never stretch the
+          page. overscroll-contain stops scroll chaining to the page. */}
+      <div className="relative flex min-h-0 flex-col rounded-lg border border-border bg-surface lg:flex-1">
         {following && (
           <div className="absolute right-3 top-2 z-10 flex items-center gap-1.5 rounded border border-success/40 bg-success/10 px-2 py-0.5 font-mono text-[10px] text-success">
             <span className="h-1.5 w-1.5 animate-pulse-ring rounded-full bg-success" />
             live
           </div>
         )}
-        <pre className="h-full overflow-auto p-3 font-mono text-xs leading-relaxed text-text whitespace-pre-wrap">
+        <pre
+          ref={preRef}
+          onScroll={onScroll}
+          className="flex-1 min-h-[340px] max-h-[60vh] overflow-auto overscroll-contain p-3 font-mono text-xs leading-relaxed text-text whitespace-pre-wrap lg:min-h-0 lg:max-h-none"
+        >
           {lines.length === 0 ? (
-            <span className="text-muted">
-              (no logs loaded — click Fetch or Follow)
-            </span>
+            <span className="text-muted">(streaming…)</span>
           ) : (
             lines.map((l, i) => (
               <div key={i} className="hover:bg-panel/40">
