@@ -1,4 +1,6 @@
+import { AnimatePresence, motion } from "motion/react";
 import { useToasts } from "../../state/store";
+import { EASE_OUT } from "../../lib/motion";
 
 const STYLES: Record<
   "info" | "error" | "success",
@@ -15,8 +17,8 @@ const STYLES: Record<
     label: "ok",
   },
   info: {
-    border: "border-info/60",
-    iconBg: "bg-info/20 text-info",
+    border: "border-aurora/60",
+    iconBg: "bg-aurora/20 text-aurora",
     label: "info",
   },
 };
@@ -53,30 +55,37 @@ export function Toasts() {
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
-      {toasts.map((t) => {
-        const s = STYLES[t.kind];
-        return (
-          <div
-            key={t.id}
-            onClick={() => dismiss(t.id)}
-            className={`animate-slide-in flex max-w-sm cursor-pointer items-start gap-2.5 rounded-md border ${s.border} bg-panel px-3.5 py-2.5 shadow-panel backdrop-blur`}
-          >
-            <span
-              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${s.iconBg}`}
+      <AnimatePresence initial={false}>
+        {toasts.map((t) => {
+          const s = STYLES[t.kind];
+          return (
+            <motion.div
+              key={t.id}
+              layout
+              initial={{ opacity: 0, x: 24, scale: 0.96 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 24, scale: 0.96 }}
+              transition={{ duration: 0.22, ease: EASE_OUT }}
+              onClick={() => dismiss(t.id)}
+              className={`flex max-w-sm cursor-pointer items-start gap-2.5 rounded-lg border ${s.border} bg-panel px-3.5 py-2.5 shadow-panel backdrop-blur`}
             >
-              <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                {icon(t.kind)}
-              </svg>
-            </span>
-            <div className="min-w-0">
-              <div className="font-mono text-[9px] uppercase tracking-wider text-muted">
-                {s.label}
+              <span
+                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${s.iconBg}`}
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                  {icon(t.kind)}
+                </svg>
+              </span>
+              <div className="min-w-0">
+                <div className="font-mono text-[9px] uppercase tracking-wider text-muted">
+                  {s.label}
+                </div>
+                <div className="text-sm text-text">{t.message}</div>
               </div>
-              <div className="text-sm text-text">{t.message}</div>
-            </div>
-          </div>
-        );
-      })}
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }
